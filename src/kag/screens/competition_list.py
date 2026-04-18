@@ -40,7 +40,7 @@ class CompetitionListScreen(Screen):
         self._render_results("")
         self._load_remote()
 
-@work(thread=True)
+    @work(thread=True)
     def _load_remote(self) -> None:
         try:
             entered = list_entered_competitions()
