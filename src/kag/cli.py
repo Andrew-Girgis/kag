@@ -35,6 +35,10 @@ def init_command() -> str:
     kag_exe = _find_kag_exe()
 
     return f'''kag() {{
+    if [ "$1" = "init" ]; then
+        {kag_exe} "$@"
+        return $?
+    fi
     local kag_output
     kag_output=$({kag_exe} "$@" 2>/dev/null)
     local ret=$?
