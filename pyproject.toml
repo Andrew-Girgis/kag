@@ -1,0 +1,17 @@
+[project]
+name = "kag"
+version = "0.1.0"
+description = "Kaggle competition bootstrapper TUI - get right into the data"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "rich>=15.0.0",
+    "textual>=8.2.3",
+]
+
+[project.scripts]
+kag = "kag.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
