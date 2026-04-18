@@ -12,6 +12,10 @@ def _extract_slug(ref: str) -> str:
     return ref
 
 
+def _humanize_slug(slug: str) -> str:
+    return slug.replace("-", " ").replace("_", " ").title()
+
+
 @dataclass
 class Competition:
     slug: str
@@ -23,6 +27,8 @@ class Competition:
 
     @property
     def display_title(self) -> str:
+        if self.title == self.slug or not self.title:
+            return _humanize_slug(self.slug)[:60]
         return self.title[:60]
 
     @property

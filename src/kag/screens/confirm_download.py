@@ -40,8 +40,8 @@ class ConfirmDownloadScreen(Screen):
     def on_mount(self) -> None:
         self._load_files()
 
-    @work(exclusive=True)
-    async def _load_files(self) -> None:
+    @work(thread=True)
+    def _load_files(self) -> None:
         self.files = get_competition_files(self.competition.slug)
         try:
             files_widget = self.query_one("#comp-files", Static)
@@ -49,9 +49,11 @@ class ConfirmDownloadScreen(Screen):
                 file_list = "\n".join(f"  - {f}" for f in self.files[:10])
                 if len(self.files) > 10:
                     file_list += f"\n  ... and {len(self.files) - 10} more"
-                files_widget.update(f"Files:\n{file_list}")
             else:
-                files_widget.update("Files: (will be listed after download)")
+                file_list = "(will be listed after download)"
+            self.call_from_thread(
+                lambda: files_widget.update(f"Files:\n{file_list}")
+            )
         except Exception:
             pass
 
@@ -62,4 +64,4 @@ class ConfirmDownloadScreen(Screen):
             self.dismiss(ConfirmDownloadScreen.Confirmed(self.competition, download_files=False))
 
     def action_cancel(self) -> None:
-        self.app.pop_screen()
+        self.dismiss(None)

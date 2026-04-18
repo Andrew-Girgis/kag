@@ -1,13 +1,11 @@
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.screen import Screen
 from textual.widgets import Header, Footer
 
 from .config import Config
 from .screens.competition_list import CompetitionListScreen
 from .screens.editor_select import EditorSelectScreen
 from .screens.confirm_download import ConfirmDownloadScreen
-from .kaggle_api import Competition
 from .project import create_project
 
 
@@ -77,7 +75,6 @@ class KagApp(App):
 
     def _on_download_confirmed(self, result: ConfirmDownloadScreen.Confirmed | None) -> None:
         if result is None:
-            self.pop_screen()
             return
         self.push_screen(
             EditorSelectScreen(self.config, result.competition, result.download_files),
@@ -86,7 +83,6 @@ class KagApp(App):
 
     def _on_editor_selected(self, result: EditorSelectScreen.Selected | None) -> None:
         if result is None:
-            self.pop_screen()
             return
         project_dir = create_project(
             competition=result.competition,

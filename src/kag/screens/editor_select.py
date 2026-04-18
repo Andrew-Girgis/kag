@@ -56,4 +56,4 @@ class EditorSelectScreen(Screen):
             ))
 
     def action_cancel(self) -> None:
-        self.app.pop_screen()
+        self.dismiss(None)

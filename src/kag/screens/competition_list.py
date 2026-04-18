@@ -1,11 +1,10 @@
 import re
 from textual.app import ComposeResult
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Input, Static, ListView, ListItem, Label
 from textual.binding import Binding
 from textual import work
-
 from ..config import Config
 from ..kaggle_api import Competition, LocalProject, list_competitions, list_entered_competitions
 
@@ -28,8 +27,8 @@ class CompetitionListScreen(Screen):
         self.config = config
         self.competitions: list[Competition] = []
         self.local_projects: list[LocalProject] = []
-        self.filtered: list[Competition | LocalProject] = []
         self._loading = False
+        self._query = ""
 
     def compose(self) -> ComposeResult:
         yield Static("🏆 Kaggle Competition Selector", id="title")
@@ -37,15 +36,13 @@ class CompetitionListScreen(Screen):
         yield VerticalScroll(id="results")
 
     def on_mount(self) -> None:
-        self._load_data()
+        self.local_projects = self._scan_local()
+        self._render_results("")
+        self._load_remote()
 
-    @work(exclusive=True)
-    async def _load_data(self) -> None:
-        self._loading = True
-        self._set_display("Loading competitions...")
-
+    @work(thread=True)
+    def _load_remote(self) -> None:
         try:
-            self.local_projects = self._scan_local()
             entered = list_entered_competitions()
             general = list_competitions(group="general")
             combined = entered + general
@@ -56,12 +53,13 @@ class CompetitionListScreen(Screen):
                     seen.add(c.slug)
                     unique.append(c)
             self.competitions = unique
-        except Exception as e:
-            self._set_display(f"Error loading: {e}")
-            return
+        except Exception:
+            pass
+        self.call_from_thread(self._on_remote_loaded)
 
+    def _on_remote_loaded(self) -> None:
         self._loading = False
-        self._apply_filter("")
+        self._render_results(self._query)
 
     def _scan_local(self) -> list[LocalProject]:
         projects = []
@@ -82,30 +80,26 @@ class CompetitionListScreen(Screen):
                     continue
         return projects
 
-    def _set_display(self, message: str) -> None:
+    def _render_results(self, query: str) -> None:
+        self._query = query
         try:
             results = self.query_one("#results", VerticalScroll)
-            results.remove_children()
-            results.mount(Static(message))
         except Exception:
-            pass
-
-    def _apply_filter(self, query: str) -> None:
-        results = self.query_one("#results", VerticalScroll)
+            return
         results.remove_children()
 
-        items: list[Competition | LocalProject] = []
+        shown = 0
 
         if self.local_projects:
             results.mount(Static("── Local Projects ──", classes="section-header"))
             for p in self.local_projects:
                 if query and query.lower() not in p.name.lower():
                     continue
-                items.append(p)
                 age = self._format_age(p.modified_days_ago)
                 label_text = f"📂 {p.display_title}  {age}"
                 safe_id = re.sub(r'[^a-zA-Z0-9_\-]', '_', p.name)
                 results.mount(ListItem(Label(label_text), id=f"local-{safe_id}"))
+                shown += 1
 
         if self.competitions:
             results.mount(Static("── Kaggle Competitions ──", classes="section-header"))
@@ -113,14 +107,14 @@ class CompetitionListScreen(Screen):
                 q_lower = query.lower()
                 if query and q_lower not in c.slug.lower() and q_lower not in c.title.lower():
                     continue
-                items.append(c)
                 label_text = f"🏅 {c.display_title}  {c.reward}  {c.deadline}"
                 results.mount(ListItem(Label(label_text), id=f"remote-{c.safe_id}"))
+                shown += 1
 
-        self.filtered = items
-
-        if not items and not self._loading:
-            results.mount(Static("No competitions found."))
+        if not self.competitions and self._loading:
+            results.mount(Static("Loading competitions from Kaggle..."))
+        elif shown == 0 and query:
+            results.mount(Static(f"No matches for '{query}'"))
 
     def _format_age(self, days: float) -> str:
         if days < 1 / 24:
@@ -133,7 +127,7 @@ class CompetitionListScreen(Screen):
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "search":
-            self._apply_filter(event.value)
+            self._render_results(event.value)
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         item = event.item
