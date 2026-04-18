@@ -40,7 +40,7 @@ class CompetitionListScreen(Screen):
         self._render_results("")
         self._load_remote()
 
-    @work(thread=True)
+@work(thread=True)
     def _load_remote(self) -> None:
         try:
             entered = list_entered_competitions()
@@ -55,7 +55,7 @@ class CompetitionListScreen(Screen):
             self.competitions = unique
         except Exception:
             pass
-        self.call_from_thread(self._on_remote_loaded)
+        self.app.call_from_thread(self._on_remote_loaded)
 
     def _on_remote_loaded(self) -> None:
         self._loading = False

@@ -51,7 +51,7 @@ class ConfirmDownloadScreen(Screen):
                     file_list += f"\n  ... and {len(self.files) - 10} more"
             else:
                 file_list = "(will be listed after download)"
-            self.call_from_thread(
+            self.app.call_from_thread(
                 lambda: files_widget.update(f"Files:\n{file_list}")
             )
         except Exception:
