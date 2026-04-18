@@ -20,10 +20,19 @@ def check_kaggle_cli() -> str | None:
     return None
 
 
-def init_command() -> str:
+def _find_kag_exe() -> str:
     kag_exe = shutil.which("kag")
-    if not kag_exe:
-        kag_exe = sys.executable + " -m kag.cli"
+    if kag_exe:
+        return kag_exe
+    project_dir = Path(__file__).resolve().parent.parent
+    venv_python = project_dir / ".venv" / "bin" / "python"
+    if venv_python.exists():
+        return f"{venv_python} -m kag.cli"
+    return sys.executable + " -m kag.cli"
+
+
+def init_command() -> str:
+    kag_exe = _find_kag_exe()
 
     return f'''kag() {{
     local kag_output
