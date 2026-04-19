@@ -31,6 +31,10 @@ data/
 # Jupyter
 .ipynb_checkpoints/
 
+# R
+.Rhistory
+.RData
+
 # Testing
 .pytest_cache/
 .coverage

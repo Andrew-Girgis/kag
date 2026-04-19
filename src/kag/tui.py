@@ -20,6 +20,13 @@ class KagApp(App):
         text-align: center;
         padding: 1;
         text-style: bold;
+        color: #22beff;
+        text-wrap: nowrap;
+    }
+    #legend {
+        text-align: center;
+        color: $text-muted;
+        padding: 0 1 1 1;
     }
     .section-header {
         color: $text-muted;
@@ -43,15 +50,26 @@ class KagApp(App):
         text-style: bold;
         padding: 1 0;
     }
+    #helpbar {
+        dock: bottom;
+        width: 100%;
+        padding: 0 1;
+        color: $text-muted;
+        background: $panel;
+        border-top: solid $surface-lighten-2;
+        text-style: bold;
+    }
     """
 
     BINDINGS = [
         Binding("q", "quit", "Quit", show=True),
+        Binding("ctrl+c", "quit", "Quit", show=False),
     ]
 
-    def __init__(self, config: Config, **kwargs):
+    def __init__(self, config: Config, initial_query: str = "", **kwargs):
         super().__init__(**kwargs)
         self.config = config
+        self.initial_query = initial_query
         self.result: str | None = None
 
     def compose(self) -> ComposeResult:
@@ -59,7 +77,10 @@ class KagApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.push_screen(CompetitionListScreen(self.config), self._on_competition_selected)
+        self.push_screen(
+            CompetitionListScreen(self.config, initial_query=self.initial_query),
+            self._on_competition_selected,
+        )
 
     def _on_competition_selected(self, result: CompetitionListScreen.Selected | None) -> None:
         if result is None:

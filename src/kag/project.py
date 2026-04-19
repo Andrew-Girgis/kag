@@ -1,12 +1,17 @@
 import json
-import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 from .config import Config
-from .kaggle_api import Competition, download_competition, get_competition_files
+from .kaggle_api import (
+    Competition,
+    download_competition,
+    ensure_competition_access,
+    get_competition_files,
+)
+from .notes_fetcher import fetch_competition_markdown_sections
 
 
 STARTER_NOTEBOOK = {
@@ -88,7 +93,29 @@ def make_starter_notebook(competition_slug: str, description: str, files: list[s
     return nb
 
 
-def make_notes_md(competition: Competition, files: list[str]) -> str:
+def _overview_snippet(sections: dict[str, str]) -> str:
+    overview = sections.get("Overview", "")
+    if not overview:
+        return ""
+    for line in overview.splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        if text.startswith("#"):
+            continue
+        if text.startswith("!"):
+            continue
+        return text[:220]
+    return ""
+
+
+def make_notes_md(
+    competition: Competition,
+    files: list[str],
+    sections: dict[str, str],
+    warnings: list[str],
+    access_note: str | None = None,
+) -> str:
     lines = [
         f"# {competition.title}",
         "",
@@ -96,20 +123,42 @@ def make_notes_md(competition: Competition, files: list[str]) -> str:
         f"**Deadline:** {competition.deadline}",
         f"**Reward:** {competition.reward}",
         f"**Teams:** {competition.team_count}",
-        "",
-        "## Files",
     ]
-    for f in files:
-        lines.append(f"- `{f}`")
+
+    if access_note:
+        lines.extend([
+            "",
+            f"**Access:** {access_note}",
+        ])
+
+    if warnings:
+        lines.extend([
+            "",
+            "## Extraction Warnings",
+        ])
+        for warning in warnings:
+            lines.append(f"- {warning}")
+
     lines.extend([
         "",
-        "## Objective",
-        "",
-        "<!-- Describe the competition objective here -->",
-        "",
-        "## Evaluation",
-        "",
-        "<!-- Describe the evaluation metric here -->",
+        "## Files",
+    ])
+    for f in files:
+        lines.append(f"- `{f}`")
+
+    for section_name in ("Overview", "Evaluation", "Data", "Code", "Rules"):
+        lines.extend([
+            "",
+            f"## {section_name}",
+            "",
+        ])
+        content = sections.get(section_name, "")
+        if content:
+            lines.append(content)
+        else:
+            lines.append("_Not extracted automatically._")
+
+    lines.extend([
         "",
         "## Notes",
         "",
@@ -127,25 +176,52 @@ def create_project(
     project_dir = config.kag_path / competition.slug
     project_dir.mkdir(parents=True, exist_ok=True)
 
+    sections, extract_warnings = fetch_competition_markdown_sections(competition.slug)
+    access_note = None
+    download_permitted = download_files
+
     if download_files:
+        access_ok, access_details = ensure_competition_access(competition.slug)
+        if not access_ok:
+            download_permitted = False
+            access_note = (
+                "Competition access could not be confirmed automatically. "
+                f"Reason: {access_details}. Open Kaggle overview/rules and accept terms, then retry download."
+            )
+
+    if download_permitted:
         data_dir = project_dir / "data"
         data_dir.mkdir(exist_ok=True)
-        download_competition(competition.slug, str(data_dir))
+        downloaded = download_competition(competition.slug, str(data_dir))
+        if not downloaded:
+            access_note = (
+                "Download did not complete. Ensure you joined the competition and accepted rules, "
+                "then run kaggle competitions download manually."
+            )
 
-        zip_files = list(data_dir.glob("*.zip"))
-        for zf in zip_files:
-            import zipfile
-            with zipfile.ZipFile(zf, "r") as z:
-                z.extractall(data_dir)
+        if downloaded:
+            zip_files = list(data_dir.glob("*.zip"))
+            for zf in zip_files:
+                import zipfile
+                with zipfile.ZipFile(zf, "r") as z:
+                    z.extractall(data_dir)
 
-    files = get_competition_files(competition.slug) if download_files else []
+    files = get_competition_files(competition.slug) if (download_permitted or not download_files) else []
 
-    notebook = make_starter_notebook(competition.slug, "", files)
+    notebook_description = _overview_snippet(sections)
+
+    notebook = make_starter_notebook(competition.slug, notebook_description, files)
     notebook_path = project_dir / f"{competition.slug}.ipynb"
     with open(notebook_path, "w") as f:
         json.dump(notebook, f, indent=1)
 
-    notes = make_notes_md(competition, files)
+    notes = make_notes_md(
+        competition=competition,
+        files=files,
+        sections=sections,
+        warnings=extract_warnings,
+        access_note=access_note,
+    )
     notes_path = project_dir / "notes.md"
     notes_path.write_text(notes)
 

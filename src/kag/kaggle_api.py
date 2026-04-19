@@ -1,9 +1,9 @@
 import csv
 import io
 import subprocess
+import time
+import webbrowser
 from dataclasses import dataclass
-
-from rich.console import Console
 
 
 def _extract_slug(ref: str) -> str:
@@ -48,8 +48,22 @@ class LocalProject:
         return self.name[:60]
 
 
-def list_competitions(group: str = "general", search: str | None = None) -> list[Competition]:
-    cmd = ["kaggle", "competitions", "list", "--csv", "--page-size", "200"]
+def list_competitions_page(
+    group: str = "general",
+    search: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> tuple[list[Competition], bool]:
+    cmd = [
+        "kaggle",
+        "competitions",
+        "list",
+        "--csv",
+        "--page-size",
+        str(page_size),
+        "--page",
+        str(page),
+    ]
     if group:
         cmd.extend(["--group", group])
     if search:
@@ -58,9 +72,9 @@ def list_competitions(group: str = "general", search: str | None = None) -> list
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode != 0:
-            return []
+            return [], False
     except (subprocess.TimeoutExpired, FileNotFoundError):
-        return []
+        return [], False
 
     competitions = []
     reader = csv.DictReader(io.StringIO(result.stdout))
@@ -76,6 +90,22 @@ def list_competitions(group: str = "general", search: str | None = None) -> list
             reward=row.get("reward", "").strip(),
             team_count=row.get("teamsCount", "0").strip(),
         ))
+    has_more = len(competitions) >= page_size
+    return competitions, has_more
+
+
+def list_competitions(
+    group: str = "general",
+    search: str | None = None,
+    page: int = 1,
+    page_size: int = 200,
+) -> list[Competition]:
+    competitions, _ = list_competitions_page(
+        group=group,
+        search=search,
+        page=page,
+        page_size=page_size,
+    )
     return competitions
 
 
@@ -108,6 +138,47 @@ def download_competition(slug: str, path: str) -> bool:
         return result.returncode == 0
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return False
+
+
+def check_competition_access(slug: str) -> tuple[bool, str]:
+    cmd = ["kaggle", "competitions", "files", "-v", slug]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False, "Unable to run kaggle access check"
+
+    if result.returncode == 0:
+        return True, "Access confirmed"
+
+    details = (result.stderr or result.stdout or "").strip()
+    if details:
+        details = details.splitlines()[0]
+    return False, details or "Competition access denied"
+
+
+def open_competition_in_browser(slug: str) -> None:
+    base = f"https://www.kaggle.com/competitions/{slug}"
+    webbrowser.open_new_tab(f"{base}/overview")
+    webbrowser.open_new_tab(f"{base}/rules")
+
+
+def ensure_competition_access(
+    slug: str,
+    retries: int = 6,
+    wait_seconds: int = 4,
+) -> tuple[bool, str]:
+    access_ok, details = check_competition_access(slug)
+    if access_ok:
+        return True, details
+
+    open_competition_in_browser(slug)
+    for _ in range(retries):
+        time.sleep(wait_seconds)
+        access_ok, details = check_competition_access(slug)
+        if access_ok:
+            return True, "Access confirmed after browser join"
+
+    return False, details
 
 
 def get_competition_description(slug: str) -> str:

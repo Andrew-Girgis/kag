@@ -1,117 +1,126 @@
-# kag - fresh directories for every kaggle competition
+# kag - fresh Kaggle competition workspaces from your terminal
 
-*Heavily inspired by Tobi's brilliant [try](https://github.com/tobi/try) - but built for data science.*
+`kag` is a Textual TUI inspired by [`try`](https://github.com/tobi/try), built for Kaggle workflows.
 
-Setup should take seconds, not twenty minutes. 🏠
+It helps you go from "I want to work on this competition" to a ready folder with data, notebook, notes, and editor open.
 
-For everyone who constantly creates new folders for their Kaggle Competition notebooks, a terminal app to quickly manage, download, and navigate to keep them somewhat organized.
+## Demo
 
-Ever find yourself with 50 directories named `titanic`, `titanic2`, `new-titanic`, `actually-working-titanic`, scattered across your filesystem? Or worse, manually unzipping data and typing out `import pandas as pd` for the 100th time?
+Asciinema walkthrough placeholder: `docs/demo-placeholder.md`
 
-`kag` is here for your beautifully chaotic data mind.
+Planned recording file path: `docs/demo.cast`
 
-## The Problem
-You're learning XGBoost. You create `~/Desktop/titanic`. You run `kaggle competitions download -c titanic`. You unzip it. You create a virtual environment. You touch `titanic.ipynb`. You write the pandas imports. Twenty minutes later, you're finally looking at the data, but your 2am motivation is entirely gone.
+## What kag does
 
-## The Solution
-All your competitions in one place, with an instant fuzzy search TUI:
-
-```bash
-$ kag
-```
-
-Type, arrow down, enter. You're there. The data is downloaded, the environment is ready, and your editor is open.
-
-## What it does
-
-Instantly navigate through your Kaggle projects and bootstrap new competitions with:
-
-* **Interactive TUI** - Browse your existing projects or the entire Kaggle catalog
-* **Instant Scaffolding** - Downloads data, creates a starter notebook, sets up git, and builds a venv
-* **Zero friction** - Just type to search, hit enter, and you're coding
+- Shows a searchable competition picker with sections:
+  - `Your notebooks` (local projects in `KAG_PATH`)
+  - `Joined competitions`
+  - `All competitions`
+- Uses paginated loading for competitions (`20` per page) and auto-loads more when you reach the end.
+- Scaffolds a project folder:
+  - `data/` (download + extract)
+  - `<competition>.ipynb`
+  - `notes.md`
+  - `.venv` (optional)
+  - `git init` (optional)
+- Checks competition access before download and opens browser tabs for `overview` + `rules` when acceptance is needed.
+- Enriches `notes.md` from Kaggle competition content (`Overview`, `Evaluation`, `Data`, `Code`, `Rules`).
 
 ## Installation
 
 ### Prerequisites
-- Python 3.11+
-- [Kaggle CLI](https://github.com/Kaggle/kaggle-api) installed and authenticated (`~/.kaggle/kaggle.json`)
 
-### uv (Recommended)
+- Python 3.11+
+- [Kaggle CLI](https://github.com/Kaggle/kaggle-api) installed and authenticated
+  - Preferred: `KAGGLE_API_TOKEN`
+  - Also supported: `KAGGLE_USERNAME` + `KAGGLE_KEY`
+  - Legacy fallback: `~/.kaggle/kaggle.json`
+
+### Install with uv
 
 ```bash
 uv tool install .
 ```
-*(or `uv sync` for development)*
 
-Then add the shell hook so `kag` can automatically `cd` you into your new projects:
+For development:
 
 ```bash
-# Bash/Zsh - add to .zshrc or .bashrc
-eval "$(kag init)"
-
-# Fish - add to config.fish
-kag init | source
+uv sync
 ```
 
-## Features
+## Shell integration (for automatic cd)
 
-**Smart Scaffolding**
-Not just downloading a zip. `kag` builds a real project:
-```text
-~/Kaggle/titanic/
-├── data/             # Extracted competition files
-├── titanic.ipynb     # Starter notebook with imports & data loading
-├── notes.md          # Competition metadata & notes template
-├── .gitignore
-└── .venv/            # Ready-to-use Python virtual environment
+Add this to your shell config:
+
+```bash
+# zsh/bash
+eval "$(kag --init)"
 ```
 
-**TUI**
-Clean, minimal terminal interface powered by Textual.
-Highlights matches as you type. Dark mode by default (because obviously).
+Without shell integration, `kag` still works, but your current shell will not auto-`cd` into the selected project directory.
 
-**Instant Editor Launch**
-Automatically boots up your environment in:
-- VS Code (`code`)
-- Cursor
-- Zed
-- Windsurf
-- Jupyter Lab
+## Usage
 
-**Stay Organized**
-Everything lives in `~/Kaggle` (configurable via `KAG_PATH`).
+```bash
+kag                  # open TUI
+kag titanic          # open TUI with initial search query
+kag --doctor         # environment checks
+kag --doctor --json  # machine-readable checks
+```
+
+## How it works
+
+1. Open picker (`kag`)
+2. Search and select competition or local project
+3. If needed, choose download and editor
+4. `kag` verifies competition access before download
+5. Project is scaffolded and opened
+6. If `--init` hook is installed, your shell `cd`s into the project
+
+## Search behavior
+
+Search is currently case-insensitive substring filtering over competition slug/title and local project names.
 
 ## Configuration
-Set `KAG_PATH` to change where experiments are stored:
+
+`KAG_PATH` controls where projects are created (default: `~/Kaggle`):
 
 ```bash
-export KAG_PATH=~/projects/data-science
+export KAG_PATH=~/Kaggle
 ```
-Default: `~/Kaggle`
 
-Or create a `~/.kag_config.toml` for more control:
+Optional `~/.kag_config.toml`:
+
 ```toml
 kag_path = "/Users/you/Kaggle"
-default_editor = "cursor"
+default_editor = "code"
 auto_venv = true
 auto_git = true
 ```
 
-## Usage
+## Troubleshooting
+
+Run:
+
 ```bash
-kag                  # Open the TUI to browse or create
-kag --help           # Show help
+kag --doctor
 ```
 
-### Keyboard Shortcuts
-- `↑/↓` or `j/k` - Navigate
-- `Enter` - Select or create
-- `ESC` or `Ctrl+C` - Cancel
-- `q` - Quit
-- Just type to filter
+It checks:
+
+- `kag` on PATH
+- `kaggle` CLI + auth status
+- API probe (`kaggle competitions list --page-size 1`)
+- shell hook presence
+- writable directories
+- detected editors
+
+## Current limitations
+
+- Competition join/terms acceptance is browser-assisted (not a direct Kaggle CLI command).
+- Notes extraction depends on Kaggle page APIs/content shape and may vary by competition.
+- Search is substring-based (not fuzzy-ranked yet).
 
 ## License
 
-MIT - Do whatever you want with it.
-
-Skip to the fun part - exploring the data 
+MIT

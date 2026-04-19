@@ -5,6 +5,9 @@ description = "Kaggle competition bootstrapper TUI - get right into the data"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "beautifulsoup4>=4.13.0",
+    "markdownify>=1.2.0",
+    "requests>=2.32.0",
     "rich>=15.0.0",
     "textual>=8.2.3",
 ]

@@ -1,8 +1,8 @@
 from textual.app import ComposeResult
 from textual.screen import Screen
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, Static, Label
+from textual.containers import Vertical
+from textual.widgets import Static, Label, ListView, ListItem
 
 from ..kaggle_api import Competition, get_competition_files
 from textual import work
@@ -33,34 +33,43 @@ class ConfirmDownloadScreen(Screen):
                 yield Static(f"Deadline: {self.competition.deadline}")
             yield Static("", id="comp-files")
             yield Static("Download competition files?", id="download-question")
-            with Horizontal(id="buttons"):
-                yield Button("Yes, download", variant="primary", id="btn-yes")
-                yield Button("No, skip download", variant="default", id="btn-no")
+            yield ListView(
+                ListItem(Label("Yes, download"), id="opt-yes"),
+                ListItem(Label("No, skip download"), id="opt-no"),
+                id="download-options",
+            )
 
     def on_mount(self) -> None:
         self._load_files()
+        options = self.query_one("#download-options", ListView)
+        options.index = 0
+        options.focus()
 
     @work(thread=True)
     def _load_files(self) -> None:
-        self.files = get_competition_files(self.competition.slug)
+        files = get_competition_files(self.competition.slug)
+        self.app.call_from_thread(self._on_files_loaded, files)
+
+    def _on_files_loaded(self, files: list[str]) -> None:
+        self.files = files
         try:
             files_widget = self.query_one("#comp-files", Static)
-            if self.files:
-                file_list = "\n".join(f"  - {f}" for f in self.files[:10])
-                if len(self.files) > 10:
-                    file_list += f"\n  ... and {len(self.files) - 10} more"
-            else:
-                file_list = "(will be listed after download)"
-            self.app.call_from_thread(
-                lambda: files_widget.update(f"Files:\n{file_list}")
-            )
         except Exception:
-            pass
+            return
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn-yes":
+        if self.files:
+            file_list = "\n".join(f"  - {f}" for f in self.files[:10])
+            if len(self.files) > 10:
+                file_list += f"\n  ... and {len(self.files) - 10} more"
+        else:
+            file_list = "(will be listed after download)"
+        files_widget.update(f"Files:\n{file_list}")
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        item_id = event.item.id
+        if item_id == "opt-yes":
             self.dismiss(ConfirmDownloadScreen.Confirmed(self.competition, download_files=True))
-        elif event.button.id == "btn-no":
+        elif item_id == "opt-no":
             self.dismiss(ConfirmDownloadScreen.Confirmed(self.competition, download_files=False))
 
     def action_cancel(self) -> None:
