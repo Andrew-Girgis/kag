@@ -1,6 +1,5 @@
 from textual.app import ComposeResult
 from textual.screen import Screen
-from textual.containers import Vertical
 from textual.widgets import ListItem, Label, ListView, Static
 from textual.binding import Binding
 

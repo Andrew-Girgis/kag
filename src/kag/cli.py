@@ -5,6 +5,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from . import __version__
 from .config import Config
 
 
@@ -205,6 +206,9 @@ def main() -> None:
     if "--doctor" in args:
         json_output = "--json" in args
         raise SystemExit(doctor_command(json_output=json_output))
+    if "--version" in args:
+        print(f"kag {__version__}")
+        return
 
     error = check_kaggle_cli()
     if error:
@@ -223,3 +227,7 @@ def main() -> None:
 
     if result:
         RESULT_FILE.write_text(result)
+
+
+if __name__ == "__main__":
+    main()

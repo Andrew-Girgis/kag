@@ -1,5 +1,8 @@
 # kag - fresh Kaggle competition workspaces from your terminal
 
+[![PyPI](https://img.shields.io/pypi/v/kag.svg)](https://pypi.org/project/kag/)
+[![Python Versions](https://img.shields.io/pypi/pyversions/kag.svg)](https://pypi.org/project/kag/)
+
 `kag` is a Textual TUI inspired by [`try`](https://github.com/tobi/try), built for Kaggle workflows.
 
 It helps you go from "I want to work on this competition" to a ready folder with data, notebook, notes, and editor open.
@@ -28,7 +31,49 @@ Planned recording file path: `docs/demo.cast`
 
 ## Installation
 
-### Prerequisites
+`kag` is published on PyPI and installs as a global terminal command.
+
+### Recommended: uv
+
+```bash
+uv tool install kag
+```
+
+### Alternative: pipx
+
+```bash
+pipx install kag
+```
+
+### Fallback: pip
+
+```bash
+python -m pip install kag
+```
+
+Validate your install:
+
+```bash
+kag --version
+kag --doctor
+```
+
+For development from this repository:
+
+```bash
+uv sync
+uv run kag --doctor
+```
+
+## Setup guide
+
+### 1. Install kag
+
+```bash
+uv tool install kag
+```
+
+### 2. Install and authenticate Kaggle CLI
 
 - Python 3.11+
 - [Kaggle CLI](https://github.com/Kaggle/kaggle-api) installed and authenticated
@@ -36,28 +81,57 @@ Planned recording file path: `docs/demo.cast`
   - Also supported: `KAGGLE_USERNAME` + `KAGGLE_KEY`
   - Legacy fallback: `~/.kaggle/kaggle.json`
 
-### Install with uv
-
 ```bash
-uv tool install .
+python -m pip install kaggle
+kaggle --version
 ```
 
-For development:
+### 3. Verify your environment
 
 ```bash
-uv sync
+kag --doctor
 ```
 
-## Shell integration (for automatic cd)
+Fix any `FAIL` rows before starting a competition workspace.
 
-Add this to your shell config:
+### 4. Choose where projects are created
+
+By default, `kag` creates projects in `~/Kaggle`. Override it with `KAG_PATH`:
 
 ```bash
-# zsh/bash
+export KAG_PATH=~/Kaggle
+```
+
+Optional persistent config lives at `~/.kag_config.toml`:
+
+```toml
+kag_path = "/Users/you/Kaggle"
+default_editor = "code"
+auto_venv = true
+auto_git = true
+```
+
+### 5. Start using kag
+
+```bash
+kag
+kag titanic
+```
+
+Optional shell integration lets `kag` automatically `cd` into the selected project directory:
+
+```bash
 eval "$(kag --init)"
 ```
 
-Without shell integration, `kag` still works, but your current shell will not auto-`cd` into the selected project directory.
+## Quick start
+
+```bash
+kag                  # open TUI
+kag titanic          # open TUI with initial search query
+kag --doctor         # environment checks
+kag --version        # show installed version
+```
 
 ## Usage
 
@@ -66,6 +140,8 @@ kag                  # open TUI
 kag titanic          # open TUI with initial search query
 kag --doctor         # environment checks
 kag --doctor --json  # machine-readable checks
+kag --version        # show installed version
+kag --init           # print optional shell integration
 ```
 
 ## How it works
@@ -80,23 +156,6 @@ kag --doctor --json  # machine-readable checks
 ## Search behavior
 
 Search is currently case-insensitive substring filtering over competition slug/title and local project names.
-
-## Configuration
-
-`KAG_PATH` controls where projects are created (default: `~/Kaggle`):
-
-```bash
-export KAG_PATH=~/Kaggle
-```
-
-Optional `~/.kag_config.toml`:
-
-```toml
-kag_path = "/Users/you/Kaggle"
-default_editor = "code"
-auto_venv = true
-auto_git = true
-```
 
 ## Troubleshooting
 

@@ -51,7 +51,7 @@ def make_starter_notebook(competition_slug: str, description: str, files: list[s
         "outputs": []
     })
 
-    data_path = f'"data/"'
+    data_path = '"data/"'
     nb["cells"].append({
         "cell_type": "markdown",
         "metadata": {},
