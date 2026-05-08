@@ -6,6 +6,10 @@ import webbrowser
 from dataclasses import dataclass
 
 
+class KaggleFetchError(RuntimeError):
+    pass
+
+
 def _extract_slug(ref: str) -> str:
     if ref.startswith("http"):
         return ref.rstrip("/").split("/")[-1]
@@ -72,12 +76,21 @@ def list_competitions_page(
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode != 0:
-            return [], False
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return [], False
+            details = (result.stderr or result.stdout or "").strip()
+            if details:
+                details = details.splitlines()[0]
+            raise KaggleFetchError(details or "Kaggle competitions could not be loaded")
+    except FileNotFoundError as exc:
+        raise KaggleFetchError("kaggle CLI not found") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise KaggleFetchError("Kaggle competitions request timed out") from exc
 
     competitions = []
     reader = csv.DictReader(io.StringIO(result.stdout))
+    if reader.fieldnames is None:
+        raise KaggleFetchError("Kaggle competitions response was not valid CSV")
+    if "ref" not in reader.fieldnames:
+        raise KaggleFetchError("Kaggle competitions response was not valid CSV")
     for row in reader:
         ref = row.get("ref", "").strip()
         if not ref:
