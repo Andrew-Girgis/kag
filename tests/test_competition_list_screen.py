@@ -33,6 +33,10 @@ async def test_remote_failure_keeps_local_projects_and_shows_guidance(
         text = "\n".join(_label_texts(app)).lower()
 
     assert "titanic" in text
-    assert "could not load competitions" in text
-    assert "kag --doctor" in text
+    assert "could not load competitions" in text, (
+        "Expected a clear remote-fetch failure message when Kaggle competition loading raises an exception."
+    )
+    assert "kag --doctor" in text, (
+        "Expected troubleshooting guidance to be shown when remote competition loading fails."
+    )
     assert "no competitions found" not in text
