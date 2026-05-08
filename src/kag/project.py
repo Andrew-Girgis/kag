@@ -2,7 +2,8 @@ import json
 import shutil
 import subprocess
 import sys
-from pathlib import Path
+import zipfile
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from .config import Config
 from .kaggle_api import (
@@ -167,6 +168,56 @@ def make_notes_md(
     return "\n".join(lines)
 
 
+def _safe_zip_target(member_name: str, destination: Path) -> Path | None:
+    normalized_name = member_name.replace("\\", "/")
+    member_path = PurePosixPath(normalized_name)
+    windows_path = PureWindowsPath(member_name)
+
+    if (
+        "\x00" in member_name
+        or not member_path.parts
+        or member_path.is_absolute()
+        or windows_path.is_absolute()
+        or windows_path.drive
+        or ".." in member_path.parts
+    ):
+        return None
+
+    destination = destination.resolve()
+    target = destination.joinpath(*member_path.parts).resolve()
+
+    try:
+        target.relative_to(destination)
+    except ValueError:
+        return None
+
+    return target
+
+
+def _extract_zip_safely(zip_path: Path, destination: Path) -> list[str]:
+    warnings: list[str] = []
+    destination.mkdir(parents=True, exist_ok=True)
+
+    with zipfile.ZipFile(zip_path, "r") as archive:
+        for member in archive.infolist():
+            target = _safe_zip_target(member.filename, destination)
+            if target is None:
+                warnings.append(
+                    f"Skipped unsafe archive entry `{member.filename}` from `{zip_path.name}`."
+                )
+                continue
+
+            if member.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(member, "r") as source, target.open("wb") as output:
+                shutil.copyfileobj(source, output)
+
+    return warnings
+
+
 def create_project(
     competition: Competition,
     config: Config,
@@ -202,9 +253,7 @@ def create_project(
         if downloaded:
             zip_files = list(data_dir.glob("*.zip"))
             for zf in zip_files:
-                import zipfile
-                with zipfile.ZipFile(zf, "r") as z:
-                    z.extractall(data_dir)
+                extract_warnings.extend(_extract_zip_safely(zf, data_dir))
 
     files = get_competition_files(competition.slug) if (download_permitted or not download_files) else []
 
