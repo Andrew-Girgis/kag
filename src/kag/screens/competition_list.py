@@ -6,7 +6,13 @@ from textual.binding import Binding
 from rich.text import Text
 import time
 from ..config import Config
-from ..kaggle_api import Competition, LocalProject, list_competitions_page, list_entered_competitions
+from ..kaggle_api import (
+    Competition,
+    KaggleFetchError,
+    LocalProject,
+    list_competitions_page,
+    list_entered_competitions,
+)
 
 from datetime import datetime
 
@@ -64,6 +70,8 @@ class CompetitionListScreen(Screen):
         self._all_page = 0
         self._all_has_more = False
         self._all_loading_more = False
+        self._remote_error: str | None = None
+        self._pagination_error: str | None = None
         self._helpbar_base = "↑/↓: Navigate  Enter: Select  Esc: Cancel"
         self._spinner_frames = ["|", "/", "-", "\\"]
         self._spinner_index = 0
@@ -174,6 +182,25 @@ class CompetitionListScreen(Screen):
                 return idx
         return None
 
+    def _remote_error_text(self) -> Text:
+        text = Text()
+        text.append("⚠ Kaggle competitions unavailable\n", style="bold red")
+        text.append("Could not reach Kaggle or authenticate with Kaggle.\n")
+        text.append("Local notebooks are still available.\n", style="green")
+        text.append("Fix: check Wi-Fi/auth, then run ")
+        text.append("kag --doctor", style="bold cyan")
+        text.append(".")
+        return text
+
+    def _pagination_error_text(self) -> Text:
+        text = Text()
+        text.append("⚠ Could not load more competitions\n", style="bold red")
+        text.append("Loaded competitions are still available.\n", style="green")
+        text.append("Fix: check Wi-Fi/auth, then run ")
+        text.append("kag --doctor", style="bold cyan")
+        text.append(".")
+        return text
+
     def _focus_list_for_navigation(self, direction: str) -> bool:
         search = self.query_one("#search", Input)
         if not search.has_focus:
@@ -212,6 +239,7 @@ class CompetitionListScreen(Screen):
         all_competitions: list[Competition] = []
         all_has_more = False
         all_page = 1
+        error: str | None = None
         try:
             joined = list_entered_competitions()
             general, all_has_more = list_competitions_page(
@@ -228,9 +256,18 @@ class CompetitionListScreen(Screen):
                     continue
                 seen_general.add(competition.slug)
                 all_competitions.append(competition)
-        except Exception:
-            pass
-        self.app.call_from_thread(self._on_remote_loaded, joined, all_competitions, all_has_more, all_page)
+        except KaggleFetchError as exc:
+            error = str(exc)
+        except Exception as exc:
+            error = str(exc) or "Unknown Kaggle error"
+        self.app.call_from_thread(
+            self._on_remote_loaded,
+            joined,
+            all_competitions,
+            all_has_more,
+            all_page,
+            error,
+        )
 
     def _on_remote_loaded(
         self,
@@ -238,12 +275,15 @@ class CompetitionListScreen(Screen):
         all_competitions: list[Competition],
         all_has_more: bool,
         all_page: int,
+        error: str | None,
     ) -> None:
         self.joined_competitions = joined
         self.all_competitions = all_competitions
         self._all_has_more = all_has_more
         self._all_page = all_page
         self._all_loading_more = False
+        self._remote_error = error
+        self._pagination_error = None
         self._loading = False
         self._stop_spinner()
         self._render_results(self._query)
@@ -253,6 +293,7 @@ class CompetitionListScreen(Screen):
         next_page = self._all_page + 1
         new_competitions: list[Competition] = []
         has_more = False
+        error: str | None = None
         try:
             general_page, has_more = list_competitions_page(
                 group="general",
@@ -266,16 +307,27 @@ class CompetitionListScreen(Screen):
                     continue
                 existing_slugs.add(competition.slug)
                 new_competitions.append(competition)
-        except Exception:
+        except KaggleFetchError as exc:
+            error = str(exc)
             has_more = False
-        self.app.call_from_thread(self._on_more_loaded, next_page, new_competitions, has_more)
+        except Exception as exc:
+            error = str(exc) or "Unknown Kaggle error"
+            has_more = False
+        self.app.call_from_thread(self._on_more_loaded, next_page, new_competitions, has_more, error)
 
-    def _on_more_loaded(self, page: int, new_competitions: list[Competition], has_more: bool) -> None:
+    def _on_more_loaded(
+        self,
+        page: int,
+        new_competitions: list[Competition],
+        has_more: bool,
+        error: str | None,
+    ) -> None:
         if new_competitions:
             self.all_competitions.extend(new_competitions)
         self._all_page = page
         self._all_has_more = has_more
         self._all_loading_more = False
+        self._pagination_error = error
         self._stop_spinner()
         self._render_results(self._query)
 
@@ -419,7 +471,25 @@ class CompetitionListScreen(Screen):
                     )
                 )
 
-        if shown == 0 and not self._loading:
+        if self._remote_error and not self._loading:
+            results.mount(
+                ListItem(
+                    Label(self._remote_error_text()),
+                    id=f"info-{self._render_version}-remote-error",
+                    disabled=True,
+                )
+            )
+
+        if self._pagination_error and not self._loading and not self._all_loading_more:
+            results.mount(
+                ListItem(
+                    Label(self._pagination_error_text()),
+                    id=f"info-{self._render_version}-pagination-error",
+                    disabled=True,
+                )
+            )
+
+        if shown == 0 and not self._loading and not self._remote_error:
             if query:
                 results.mount(
                     ListItem(
