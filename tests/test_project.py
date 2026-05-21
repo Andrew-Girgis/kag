@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from kag.config import Config
-from kag.kaggle_api import Competition
+from kag.kaggle_api import Competition, CompetitionFile, DownloadResult, FileListResult
 from kag import project
 from kag.project import _extract_zip_safely
 
@@ -99,9 +99,16 @@ def test_create_project_records_unsafe_zip_entries_in_notes(
                 "../escape.txt": "escape\n",
             },
         )
-        return True
+        return DownloadResult(True, "Download completed", (f"{slug}.zip",))
 
-    monkeypatch.setattr(project, "ensure_competition_access", lambda slug: (True, "Access confirmed"))
+    monkeypatch.setattr(
+        project, "check_competition_access", lambda slug: (True, "Access confirmed")
+    )
+    monkeypatch.setattr(
+        project,
+        "list_competition_files",
+        lambda slug: FileListResult(True, (CompetitionFile("train.csv", 123),)),
+    )
     monkeypatch.setattr(project, "download_competition", fake_download_competition)
     monkeypatch.setattr(project, "get_competition_files", lambda slug: ["train.csv"])
     monkeypatch.setattr(project, "fetch_competition_markdown_sections", lambda slug: ({}, []))
@@ -117,3 +124,193 @@ def test_create_project_records_unsafe_zip_entries_in_notes(
     assert "Skipped unsafe archive entry `../escape.txt` from `unsafe-archive.zip`." in notes
     assert (Path(project_path) / "data" / "train.csv").read_text() == "safe\n"
     assert not (tmp_path / "escape.txt").exists()
+
+
+def test_create_project_raises_and_removes_new_project_after_download_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    competition = Competition(
+        slug="forbidden-download",
+        title="Forbidden Download",
+        deadline="",
+        reward="",
+        team_count="0",
+    )
+
+    monkeypatch.setattr(
+        project, "check_competition_access", lambda slug: (True, "Access confirmed")
+    )
+    monkeypatch.setattr(
+        project,
+        "list_competition_files",
+        lambda slug: FileListResult(True, (CompetitionFile("train.csv", 123),)),
+    )
+    monkeypatch.setattr(
+        project,
+        "download_competition",
+        lambda slug, data_dir: DownloadResult(False, "403 Client Error: Forbidden", ()),
+    )
+    monkeypatch.setattr(project, "fetch_competition_markdown_sections", lambda slug: ({}, []))
+
+    with pytest.raises(project.ProjectCreationError, match="403 Client Error: Forbidden"):
+        project.create_project(
+            competition,
+            Config(kag_path=tmp_path, auto_git=False, auto_venv=False),
+        )
+
+    assert not (tmp_path / "forbidden-download").exists()
+
+
+def test_create_project_preserves_existing_project_after_download_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    competition = Competition(
+        slug="existing-project",
+        title="Existing Project",
+        deadline="",
+        reward="",
+        team_count="0",
+    )
+    project_dir = tmp_path / competition.slug
+    project_dir.mkdir()
+    sentinel = project_dir / "keep.txt"
+    sentinel.write_text("keep")
+
+    monkeypatch.setattr(
+        project, "check_competition_access", lambda slug: (True, "Access confirmed")
+    )
+    monkeypatch.setattr(
+        project,
+        "list_competition_files",
+        lambda slug: FileListResult(True, (CompetitionFile("train.csv", 123),)),
+    )
+    monkeypatch.setattr(
+        project,
+        "download_competition",
+        lambda slug, data_dir: DownloadResult(False, "403 Client Error: Forbidden", ()),
+    )
+    monkeypatch.setattr(project, "fetch_competition_markdown_sections", lambda slug: ({}, []))
+
+    with pytest.raises(project.ProjectCreationError):
+        project.create_project(
+            competition,
+            Config(kag_path=tmp_path, auto_git=False, auto_venv=False),
+        )
+
+    assert sentinel.read_text() == "keep"
+    assert not (project_dir / "existing-project.ipynb").exists()
+    assert not (project_dir / "notes.md").exists()
+
+
+def test_create_project_does_not_open_editor_after_download_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    competition = Competition(
+        slug="no-editor-on-failure",
+        title="No Editor On Failure",
+        deadline="",
+        reward="",
+        team_count="0",
+    )
+    popen_calls: list[object] = []
+
+    monkeypatch.setattr(
+        project, "check_competition_access", lambda slug: (True, "Access confirmed")
+    )
+    monkeypatch.setattr(
+        project,
+        "list_competition_files",
+        lambda slug: FileListResult(True, (CompetitionFile("train.csv", 123),)),
+    )
+    monkeypatch.setattr(
+        project,
+        "download_competition",
+        lambda slug, data_dir: DownloadResult(False, "403 Client Error: Forbidden", ()),
+    )
+    monkeypatch.setattr(project, "fetch_competition_markdown_sections", lambda slug: ({}, []))
+    monkeypatch.setattr(project.shutil, "which", lambda cmd: "/usr/bin/code")
+    monkeypatch.setattr(
+        project.subprocess, "Popen", lambda *args, **kwargs: popen_calls.append(args)
+    )
+
+    with pytest.raises(project.ProjectCreationError):
+        project.create_project(
+            competition,
+            Config(kag_path=tmp_path, auto_git=False, auto_venv=False),
+            editor="code",
+        )
+
+    assert popen_calls == []
+
+
+def test_create_project_without_download_still_creates_project(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    competition = Competition(
+        slug="skip-download",
+        title="Skip Download",
+        deadline="",
+        reward="",
+        team_count="0",
+    )
+    download_calls: list[str] = []
+
+    def fail_if_called(slug: str, data_dir: str) -> DownloadResult:
+        download_calls.append(slug)
+        return DownloadResult(False, "should not download", ())
+
+    monkeypatch.setattr(project, "download_competition", fail_if_called)
+    monkeypatch.setattr(project, "get_competition_files", lambda slug: ["train.csv"])
+    monkeypatch.setattr(project, "fetch_competition_markdown_sections", lambda slug: ({}, []))
+
+    project_path = project.create_project(
+        competition,
+        Config(kag_path=tmp_path, auto_git=False, auto_venv=False),
+        download_files=False,
+    )
+
+    assert download_calls == []
+    assert project_path is not None
+    assert (Path(project_path) / "skip-download.ipynb").exists()
+    assert (Path(project_path) / "notes.md").exists()
+
+
+def test_create_project_skips_download_when_file_listing_is_empty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    competition = Competition(
+        slug="no-data-competition",
+        title="No Data Competition",
+        deadline="",
+        reward="",
+        team_count="0",
+    )
+    download_calls: list[str] = []
+
+    def fail_if_called(slug: str, data_dir: str) -> DownloadResult:
+        download_calls.append(slug)
+        return DownloadResult(False, "should not download", ())
+
+    monkeypatch.setattr(
+        project, "check_competition_access", lambda slug: (True, "Access confirmed")
+    )
+    monkeypatch.setattr(project, "list_competition_files", lambda slug: FileListResult(True, ()))
+    monkeypatch.setattr(project, "download_competition", fail_if_called)
+    monkeypatch.setattr(project, "fetch_competition_markdown_sections", lambda slug: ({}, []))
+
+    project_path = project.create_project(
+        competition,
+        Config(kag_path=tmp_path, auto_git=False, auto_venv=False),
+        download_files=True,
+    )
+
+    assert download_calls == []
+    assert project_path is not None
+    assert not (Path(project_path) / "data").exists()
+    assert (Path(project_path) / "no-data-competition.ipynb").exists()
+    assert (Path(project_path) / "notes.md").exists()

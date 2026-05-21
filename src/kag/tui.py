@@ -3,10 +3,12 @@ from textual.binding import Binding
 from textual.widgets import Header, Footer
 
 from .config import Config
+from .kaggle_api import check_competition_access
+from .screens.access_required import AccessRequiredScreen
 from .screens.competition_list import CompetitionListScreen
 from .screens.editor_select import EditorSelectScreen
 from .screens.confirm_download import ConfirmDownloadScreen
-from .project import create_project
+from .project import ProjectCreationError, create_project
 
 
 class KagApp(App):
@@ -89,6 +91,16 @@ class KagApp(App):
             self.result = result.project_path
             self.exit()
             return
+        if not result.competition.is_joined:
+            self.push_screen(
+                AccessRequiredScreen(
+                    result.competition,
+                    "Please join this competition and accept its rules before downloading data.",
+                ),
+                self._on_access_resolved,
+            )
+            return
+
         self.push_screen(
             ConfirmDownloadScreen(result.competition),
             self._on_download_confirmed,
@@ -97,6 +109,30 @@ class KagApp(App):
     def _on_download_confirmed(self, result: ConfirmDownloadScreen.Confirmed | None) -> None:
         if result is None:
             return
+        if result.download_files:
+            access_ok, access_details = check_competition_access(result.competition.slug)
+            if not access_ok:
+                self.push_screen(
+                    AccessRequiredScreen(result.competition, access_details),
+                    self._on_access_resolved,
+                )
+                return
+
+        self.push_screen(
+            EditorSelectScreen(self.config, result.competition, result.download_files),
+            self._on_editor_selected,
+        )
+
+    def _on_access_resolved(self, result: AccessRequiredScreen.Resolved | None) -> None:
+        if result is None:
+            return
+        if result.download_files:
+            self.push_screen(
+                ConfirmDownloadScreen(result.competition),
+                self._on_download_confirmed,
+            )
+            return
+
         self.push_screen(
             EditorSelectScreen(self.config, result.competition, result.download_files),
             self._on_editor_selected,
@@ -105,11 +141,21 @@ class KagApp(App):
     def _on_editor_selected(self, result: EditorSelectScreen.Selected | None) -> None:
         if result is None:
             return
-        project_dir = create_project(
-            competition=result.competition,
-            config=self.config,
-            download_files=result.download_files,
-            editor=result.editor,
-        )
+        try:
+            project_dir = create_project(
+                competition=result.competition,
+                config=self.config,
+                download_files=result.download_files,
+                editor=result.editor,
+            )
+        except ProjectCreationError as exc:
+            self.result = None
+            self.notify(str(exc), severity="error", timeout=10)
+            self.push_screen(
+                ConfirmDownloadScreen(result.competition),
+                self._on_download_confirmed,
+            )
+            return
+
         self.result = project_dir
         self.exit()
