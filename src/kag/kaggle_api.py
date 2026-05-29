@@ -192,6 +192,8 @@ def list_competition_files(slug: str) -> FileListResult:
 
     files = []
     reader = csv.DictReader(io.StringIO(_csv_payload(result.stdout, "name,")))
+    if reader.fieldnames is None or "name" not in reader.fieldnames:
+        return FileListResult(False, details="Kaggle files response was not valid CSV")
     for row in reader:
         name = row.get("name", "").strip()
         if name:

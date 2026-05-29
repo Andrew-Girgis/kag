@@ -167,6 +167,21 @@ def test_list_competition_files_distinguishes_successful_empty_listing(
     assert result.files == ()
 
 
+def test_list_competition_files_rejects_zero_exit_malformed_output(
+    monkeypatch: pytest.MonkeyPatch,
+    completed_process: type[SimpleNamespace],
+) -> None:
+    def malformed_files_cli(*args: object, **kwargs: object) -> object:
+        return completed_process(returncode=0, stdout="Next Page Token = abc\n", stderr="")
+
+    monkeypatch.setattr(kaggle_api.subprocess, "run", malformed_files_cli)
+
+    result = kaggle_api.list_competition_files("malformed-files")
+
+    assert result.success is False
+    assert result.details == "Kaggle files response was not valid CSV"
+
+
 def test_list_competition_files_includes_file_sizes(
     monkeypatch: pytest.MonkeyPatch,
     completed_process: type[SimpleNamespace],
