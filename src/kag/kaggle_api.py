@@ -4,6 +4,7 @@ import subprocess
 import time
 import webbrowser
 from dataclasses import dataclass
+from pathlib import Path
 
 
 class KaggleFetchError(RuntimeError):
@@ -28,6 +29,7 @@ class Competition:
     reward: str
     team_count: str
     has_data: bool = False
+    is_joined: bool = False
 
     @property
     def display_title(self) -> str:
@@ -50,6 +52,54 @@ class LocalProject:
     @property
     def display_title(self) -> str:
         return self.name[:60]
+
+
+@dataclass(frozen=True)
+class DownloadResult:
+    success: bool
+    details: str
+    files: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class CompetitionFile:
+    name: str
+    size: int | None = None
+
+    @property
+    def display_size(self) -> str:
+        if self.size is None:
+            return "unknown size"
+        size = float(self.size)
+        for unit in ("B", "KB", "MB", "GB"):
+            if size < 1024 or unit == "GB":
+                if unit == "B":
+                    return f"{int(size)} {unit}"
+                return f"{size:.1f} {unit}"
+            size /= 1024
+        return f"{size:.1f} GB"
+
+
+@dataclass(frozen=True)
+class FileListResult:
+    success: bool
+    files: tuple[CompetitionFile, ...] = ()
+    details: str = ""
+
+
+def _first_detail_line(stdout: str, stderr: str) -> str:
+    details = (stderr or stdout or "").strip()
+    if details:
+        return details.splitlines()[0]
+    return ""
+
+
+def _csv_payload(text: str, expected_header: str) -> str:
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if line.startswith(expected_header):
+            return "\n".join(lines[index:])
+    return text
 
 
 def list_competitions_page(
@@ -96,13 +146,15 @@ def list_competitions_page(
         if not ref:
             continue
         slug = _extract_slug(ref)
-        competitions.append(Competition(
-            slug=slug,
-            title=row.get("title", slug).strip(),
-            deadline=row.get("deadline", "").strip(),
-            reward=row.get("reward", "").strip(),
-            team_count=row.get("teamsCount", "0").strip(),
-        ))
+        competitions.append(
+            Competition(
+                slug=slug,
+                title=row.get("title", slug).strip(),
+                deadline=row.get("deadline", "").strip(),
+                reward=row.get("reward", "").strip(),
+                team_count=row.get("teamsCount", "0").strip(),
+            )
+        )
     has_more = len(competitions) >= page_size
     return competitions, has_more
 
@@ -126,31 +178,56 @@ def list_entered_competitions() -> list[Competition]:
     return list_competitions(group="entered")
 
 
-def get_competition_files(slug: str) -> list[str]:
+def list_competition_files(slug: str) -> FileListResult:
     cmd = ["kaggle", "competitions", "files", "-v", slug]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode != 0:
-            return []
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return []
+            details = _first_detail_line(result.stdout, result.stderr)
+            return FileListResult(False, details=details or "Competition files could not be listed")
+    except subprocess.TimeoutExpired:
+        return FileListResult(False, details="Kaggle files request timed out")
+    except FileNotFoundError:
+        return FileListResult(False, details="kaggle CLI not found")
 
     files = []
-    reader = csv.DictReader(io.StringIO(result.stdout))
+    reader = csv.DictReader(io.StringIO(_csv_payload(result.stdout, "name,")))
+    if reader.fieldnames is None or "name" not in reader.fieldnames:
+        return FileListResult(False, details="Kaggle files response was not valid CSV")
     for row in reader:
         name = row.get("name", "").strip()
         if name:
-            files.append(name)
-    return files
+            size_text = row.get("size", "").strip()
+            size = int(size_text) if size_text.isdigit() else None
+            files.append(CompetitionFile(name=name, size=size))
+    return FileListResult(True, tuple(files))
 
 
-def download_competition(slug: str, path: str) -> bool:
+def get_competition_files(slug: str) -> list[str]:
+    result = list_competition_files(slug)
+    if result.success:
+        return [file.name for file in result.files]
+    return []
+
+
+def download_competition(slug: str, path: str) -> DownloadResult:
     cmd = ["kaggle", "competitions", "download", "-q", slug, "-p", path]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
+    except subprocess.TimeoutExpired:
+        return DownloadResult(False, "Kaggle download timed out")
+    except FileNotFoundError:
+        return DownloadResult(False, "kaggle CLI not found")
+
+    if result.returncode != 0:
+        details = _first_detail_line(result.stdout, result.stderr)
+        return DownloadResult(False, details or "Kaggle download failed")
+
+    downloaded_files = tuple(sorted(p.name for p in Path(path).iterdir() if p.is_file()))
+    if not downloaded_files:
+        return DownloadResult(False, "Kaggle download completed but no files were found")
+
+    return DownloadResult(True, "Download completed", downloaded_files)
 
 
 def check_competition_access(slug: str) -> tuple[bool, str]:
@@ -170,9 +247,13 @@ def check_competition_access(slug: str) -> tuple[bool, str]:
 
 
 def open_competition_in_browser(slug: str) -> None:
+    open_competition_page(slug, "overview")
+    open_competition_page(slug, "rules")
+
+
+def open_competition_page(slug: str, page: str) -> None:
     base = f"https://www.kaggle.com/competitions/{slug}"
-    webbrowser.open_new_tab(f"{base}/overview")
-    webbrowser.open_new_tab(f"{base}/rules")
+    webbrowser.open_new_tab(f"{base}/{page}")
 
 
 def ensure_competition_access(

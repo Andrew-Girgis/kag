@@ -8,58 +8,56 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from .config import Config
 from .kaggle_api import (
     Competition,
+    check_competition_access,
     download_competition,
-    ensure_competition_access,
     get_competition_files,
+    list_competition_files,
 )
 from .notes_fetcher import fetch_competition_markdown_sections
+
+
+class ProjectCreationError(RuntimeError):
+    pass
 
 
 STARTER_NOTEBOOK = {
     "nbformat": 4,
     "nbformat_minor": 5,
     "metadata": {
-        "kernelspec": {
-            "display_name": "Python 3",
-            "language": "python",
-            "name": "python3"
-        },
-        "language_info": {
-            "name": "python",
-            "version": "3.11.0"
-        }
+        "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+        "language_info": {"name": "python", "version": "3.11.0"},
     },
-    "cells": []
+    "cells": [],
 }
 
 
 def make_starter_notebook(competition_slug: str, description: str, files: list[str]) -> dict:
     nb = json.loads(json.dumps(STARTER_NOTEBOOK))
 
-    nb["cells"].append({
-        "cell_type": "markdown",
-        "metadata": {},
-        "source": [f"# {competition_slug}\n\n{description or 'Kaggle competition notebook'}"]
-    })
+    nb["cells"].append(
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [f"# {competition_slug}\n\n{description or 'Kaggle competition notebook'}"],
+        }
+    )
 
-    nb["cells"].append({
-        "cell_type": "code",
-        "metadata": {},
-        "source": [
-            "import pandas as pd\nimport numpy as np\nimport matplotlib.pyplot as plt\nimport seaborn as sns\n\nfrom sklearn.model_selection import train_test_split\nfrom sklearn.preprocessing import StandardScaler\nfrom sklearn.metrics import mean_squared_error\n\nsns.set_style('whitegrid')\nprint('Setup complete')"
-        ],
-        "execution_count": None,
-        "outputs": []
-    })
+    nb["cells"].append(
+        {
+            "cell_type": "code",
+            "metadata": {},
+            "source": [
+                "import pandas as pd\nimport numpy as np\nimport matplotlib.pyplot as plt\nimport seaborn as sns\n\nfrom sklearn.model_selection import train_test_split\nfrom sklearn.preprocessing import StandardScaler\nfrom sklearn.metrics import mean_squared_error\n\nsns.set_style('whitegrid')\nprint('Setup complete')"
+            ],
+            "execution_count": None,
+            "outputs": [],
+        }
+    )
 
     data_path = '"data/"'
-    nb["cells"].append({
-        "cell_type": "markdown",
-        "metadata": {},
-        "source": ["## Data Loading"]
-    })
+    nb["cells"].append({"cell_type": "markdown", "metadata": {}, "source": ["## Data Loading"]})
 
-    load_lines = [f'data_path = {data_path}']
+    load_lines = [f"data_path = {data_path}"]
     for f in files:
         clean = f.replace(".zip", "").replace(".csv.zip", ".csv")
         if clean.endswith(".csv"):
@@ -67,29 +65,29 @@ def make_starter_notebook(competition_slug: str, description: str, files: list[s
             load_lines.append(f'{var_name} = pd.read_csv(data_path + "{clean}")')
     load_lines.append("train.head()")
 
-    nb["cells"].append({
-        "cell_type": "code",
-        "metadata": {},
-        "source": load_lines,
-        "execution_count": None,
-        "outputs": []
-    })
+    nb["cells"].append(
+        {
+            "cell_type": "code",
+            "metadata": {},
+            "source": load_lines,
+            "execution_count": None,
+            "outputs": [],
+        }
+    )
 
-    nb["cells"].append({
-        "cell_type": "markdown",
-        "metadata": {},
-        "source": ["## EDA"]
-    })
+    nb["cells"].append({"cell_type": "markdown", "metadata": {}, "source": ["## EDA"]})
 
-    nb["cells"].append({
-        "cell_type": "code",
-        "metadata": {},
-        "source": [
-            "# Explore the data\n# train.info()\n# train.describe()\n# train.isnull().sum()"
-        ],
-        "execution_count": None,
-        "outputs": []
-    })
+    nb["cells"].append(
+        {
+            "cell_type": "code",
+            "metadata": {},
+            "source": [
+                "# Explore the data\n# train.info()\n# train.describe()\n# train.isnull().sum()"
+            ],
+            "execution_count": None,
+            "outputs": [],
+        }
+    )
 
     return nb
 
@@ -127,44 +125,54 @@ def make_notes_md(
     ]
 
     if access_note:
-        lines.extend([
-            "",
-            f"**Access:** {access_note}",
-        ])
+        lines.extend(
+            [
+                "",
+                f"**Access:** {access_note}",
+            ]
+        )
 
     if warnings:
-        lines.extend([
-            "",
-            "## Extraction Warnings",
-        ])
+        lines.extend(
+            [
+                "",
+                "## Extraction Warnings",
+            ]
+        )
         for warning in warnings:
             lines.append(f"- {warning}")
 
-    lines.extend([
-        "",
-        "## Files",
-    ])
+    lines.extend(
+        [
+            "",
+            "## Files",
+        ]
+    )
     for f in files:
         lines.append(f"- `{f}`")
 
     for section_name in ("Overview", "Evaluation", "Data", "Code", "Rules"):
-        lines.extend([
-            "",
-            f"## {section_name}",
-            "",
-        ])
+        lines.extend(
+            [
+                "",
+                f"## {section_name}",
+                "",
+            ]
+        )
         content = sections.get(section_name, "")
         if content:
             lines.append(content)
         else:
             lines.append("_Not extracted automatically._")
 
-    lines.extend([
-        "",
-        "## Notes",
-        "",
-        "<!-- Your working notes -->",
-    ])
+    lines.extend(
+        [
+            "",
+            "## Notes",
+            "",
+            "<!-- Your working notes -->",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -218,6 +226,13 @@ def _extract_zip_safely(zip_path: Path, destination: Path) -> list[str]:
     return warnings
 
 
+def _download_failure_message(slug: str, details: str) -> str:
+    message = f"Download failed for {slug}: {details}"
+    if "403" in details or "forbidden" in details.lower():
+        message += " Join the competition and accept its rules on Kaggle, then retry the download."
+    return message
+
+
 def create_project(
     competition: Competition,
     config: Config,
@@ -225,75 +240,106 @@ def create_project(
     editor: str | None = None,
 ) -> str | None:
     project_dir = config.kag_path / competition.slug
+    project_existed = project_dir.exists()
     project_dir.mkdir(parents=True, exist_ok=True)
 
-    sections, extract_warnings = fetch_competition_markdown_sections(competition.slug)
-    access_note = None
-    download_permitted = download_files
+    try:
+        sections, extract_warnings = fetch_competition_markdown_sections(competition.slug)
+        access_note = None
+        download_permitted = download_files
+        listed_files: list[str] | None = None
 
-    if download_files:
-        access_ok, access_details = ensure_competition_access(competition.slug)
-        if not access_ok:
-            download_permitted = False
-            access_note = (
-                "Competition access could not be confirmed automatically. "
-                f"Reason: {access_details}. Open Kaggle overview/rules and accept terms, then retry download."
-            )
+        if download_files:
+            access_ok, access_details = check_competition_access(competition.slug)
+            if not access_ok:
+                raise ProjectCreationError(
+                    _download_failure_message(competition.slug, access_details)
+                )
+            file_list = list_competition_files(competition.slug)
+            if file_list.success:
+                listed_files = [file.name for file in file_list.files]
+                if not listed_files:
+                    download_permitted = False
 
-    if download_permitted:
-        data_dir = project_dir / "data"
-        data_dir.mkdir(exist_ok=True)
-        downloaded = download_competition(competition.slug, str(data_dir))
-        if not downloaded:
-            access_note = (
-                "Download did not complete. Ensure you joined the competition and accepted rules, "
-                "then run kaggle competitions download manually."
-            )
+        if download_permitted:
+            data_dir = project_dir / "data"
+            data_dir.mkdir(exist_ok=True)
+            download_result = download_competition(competition.slug, str(data_dir))
+            if not download_result.success:
+                raise ProjectCreationError(
+                    _download_failure_message(competition.slug, download_result.details)
+                )
 
-        if downloaded:
             zip_files = list(data_dir.glob("*.zip"))
             for zf in zip_files:
                 extract_warnings.extend(_extract_zip_safely(zf, data_dir))
 
-    files = get_competition_files(competition.slug) if (download_permitted or not download_files) else []
+        if listed_files is not None:
+            files = listed_files
+        else:
+            files = (
+                get_competition_files(competition.slug)
+                if (download_permitted or not download_files)
+                else []
+            )
 
-    notebook_description = _overview_snippet(sections)
+        notebook_description = _overview_snippet(sections)
 
-    notebook = make_starter_notebook(competition.slug, notebook_description, files)
-    notebook_path = project_dir / f"{competition.slug}.ipynb"
-    with open(notebook_path, "w") as f:
-        json.dump(notebook, f, indent=1)
+        notebook = make_starter_notebook(competition.slug, notebook_description, files)
+        notebook_path = project_dir / f"{competition.slug}.ipynb"
+        with open(notebook_path, "w") as f:
+            json.dump(notebook, f, indent=1)
 
-    notes = make_notes_md(
-        competition=competition,
-        files=files,
-        sections=sections,
-        warnings=extract_warnings,
-        access_note=access_note,
-    )
-    notes_path = project_dir / "notes.md"
-    notes_path.write_text(notes)
+        notes = make_notes_md(
+            competition=competition,
+            files=files,
+            sections=sections,
+            warnings=extract_warnings,
+            access_note=access_note,
+        )
+        notes_path = project_dir / "notes.md"
+        notes_path.write_text(notes)
 
-    if config.auto_git:
-        try:
-            subprocess.run(["git", "init"], cwd=str(project_dir), capture_output=True, timeout=10)
-            gitignore = project_dir / ".gitignore"
-            gitignore.write_text(".venv/\n__pycache__/\n*.pyc\n.ipynb_checkpoints/\ndata/\n")
-            subprocess.run(["git", "add", "-A"], cwd=str(project_dir), capture_output=True, timeout=10)
-            subprocess.run(["git", "commit", "-m", "Initial commit from kag"], cwd=str(project_dir), capture_output=True, timeout=10)
-        except Exception:
-            pass
+        if config.auto_git:
+            try:
+                subprocess.run(
+                    ["git", "init"], cwd=str(project_dir), capture_output=True, timeout=10
+                )
+                gitignore = project_dir / ".gitignore"
+                gitignore.write_text(".venv/\n__pycache__/\n*.pyc\n.ipynb_checkpoints/\ndata/\n")
+                subprocess.run(
+                    ["git", "add", "-A"], cwd=str(project_dir), capture_output=True, timeout=10
+                )
+                subprocess.run(
+                    ["git", "commit", "-m", "Initial commit from kag"],
+                    cwd=str(project_dir),
+                    capture_output=True,
+                    timeout=10,
+                )
+            except Exception:
+                pass
 
-    if config.auto_venv:
-        try:
-            subprocess.run([sys.executable, "-m", "venv", ".venv"], cwd=str(project_dir), capture_output=True, timeout=30)
-        except Exception:
-            pass
+        if config.auto_venv:
+            try:
+                subprocess.run(
+                    [sys.executable, "-m", "venv", ".venv"],
+                    cwd=str(project_dir),
+                    capture_output=True,
+                    timeout=30,
+                )
+            except Exception:
+                pass
 
-    if editor and shutil.which(editor):
-        subprocess.Popen([editor, str(project_dir)], start_new_session=True)
-    elif editor == "jupyter" and shutil.which("jupyter"):
-        nb_path = str(notebook_path)
-        subprocess.Popen(["jupyter", "lab", nb_path], cwd=str(project_dir), start_new_session=True)
+        if editor and shutil.which(editor):
+            subprocess.Popen([editor, str(project_dir)], start_new_session=True)
+        elif editor == "jupyter" and shutil.which("jupyter"):
+            nb_path = str(notebook_path)
+            subprocess.Popen(
+                ["jupyter", "lab", nb_path], cwd=str(project_dir), start_new_session=True
+            )
 
-    return str(project_dir)
+        return str(project_dir)
+    except ProjectCreationError:
+        if not project_existed:
+            shutil.rmtree(project_dir, ignore_errors=True)
+        raise

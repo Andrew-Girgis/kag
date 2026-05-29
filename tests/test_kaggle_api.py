@@ -82,3 +82,143 @@ def test_list_competitions_page_allows_successful_empty_results(
 
     assert competitions == []
     assert has_more is False
+
+
+def test_download_competition_returns_failure_details_for_403(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    completed_process: type[SimpleNamespace],
+) -> None:
+    def forbidden_cli(*args: object, **kwargs: object) -> object:
+        return completed_process(
+            returncode=1,
+            stdout="",
+            stderr="403 Client Error: Forbidden for url: https://example.test\nmore details",
+        )
+
+    monkeypatch.setattr(kaggle_api.subprocess, "run", forbidden_cli)
+
+    result = kaggle_api.download_competition("playground-series-s6e5", str(tmp_path))
+
+    assert result.success is False
+    assert "403 Client Error: Forbidden" in result.details
+
+
+def test_download_competition_fails_when_no_files_are_created(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    completed_process: type[SimpleNamespace],
+) -> None:
+    def successful_empty_cli(*args: object, **kwargs: object) -> object:
+        return completed_process(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(kaggle_api.subprocess, "run", successful_empty_cli)
+
+    result = kaggle_api.download_competition("empty-download", str(tmp_path))
+
+    assert result.success is False
+    assert "no files" in result.details.lower()
+
+
+def test_download_competition_succeeds_when_files_are_created(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    completed_process: type[SimpleNamespace],
+) -> None:
+    def successful_cli(*args: object, **kwargs: object) -> object:
+        (tmp_path / "competition.zip").write_text("zip-ish")
+        return completed_process(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(kaggle_api.subprocess, "run", successful_cli)
+
+    result = kaggle_api.download_competition("successful-download", str(tmp_path))
+
+    assert result.success is True
+    assert result.files == ("competition.zip",)
+
+
+def test_download_competition_reports_timeout(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def timeout(cmd: list[str], *args: object, **kwargs: object) -> object:
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=120)
+
+    monkeypatch.setattr(kaggle_api.subprocess, "run", timeout)
+
+    result = kaggle_api.download_competition("slow-download", str(tmp_path))
+
+    assert result.success is False
+    assert "timed out" in result.details.lower()
+
+
+def test_list_competition_files_distinguishes_successful_empty_listing(
+    monkeypatch: pytest.MonkeyPatch,
+    completed_process: type[SimpleNamespace],
+) -> None:
+    def empty_files_cli(*args: object, **kwargs: object) -> object:
+        return completed_process(returncode=0, stdout="name,size,creationDate\n", stderr="")
+
+    monkeypatch.setattr(kaggle_api.subprocess, "run", empty_files_cli)
+
+    result = kaggle_api.list_competition_files("no-data-competition")
+
+    assert result.success is True
+    assert result.files == ()
+
+
+def test_list_competition_files_rejects_zero_exit_malformed_output(
+    monkeypatch: pytest.MonkeyPatch,
+    completed_process: type[SimpleNamespace],
+) -> None:
+    def malformed_files_cli(*args: object, **kwargs: object) -> object:
+        return completed_process(returncode=0, stdout="Next Page Token = abc\n", stderr="")
+
+    monkeypatch.setattr(kaggle_api.subprocess, "run", malformed_files_cli)
+
+    result = kaggle_api.list_competition_files("malformed-files")
+
+    assert result.success is False
+    assert result.details == "Kaggle files response was not valid CSV"
+
+
+def test_list_competition_files_includes_file_sizes(
+    monkeypatch: pytest.MonkeyPatch,
+    completed_process: type[SimpleNamespace],
+) -> None:
+    def files_cli(*args: object, **kwargs: object) -> object:
+        return completed_process(
+            returncode=0,
+            stdout=(
+                "Next Page Token = abc\n"
+                "name,size,creationDate\n"
+                "train.csv,1536,2026-04-23 17:51:18.008000\n"
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(kaggle_api.subprocess, "run", files_cli)
+
+    result = kaggle_api.list_competition_files("sized-competition")
+
+    assert result.success is True
+    assert len(result.files) == 1
+    assert result.files[0].name == "train.csv"
+    assert result.files[0].size == 1536
+    assert result.files[0].display_size == "1.5 KB"
+    assert kaggle_api.get_competition_files("sized-competition") == ["train.csv"]
+
+
+def test_list_competition_files_preserves_failure_details(
+    monkeypatch: pytest.MonkeyPatch,
+    completed_process: type[SimpleNamespace],
+) -> None:
+    def failed_files_cli(*args: object, **kwargs: object) -> object:
+        return completed_process(returncode=1, stdout="", stderr="Unauthorized\nmore")
+
+    monkeypatch.setattr(kaggle_api.subprocess, "run", failed_files_cli)
+
+    result = kaggle_api.list_competition_files("private-competition")
+
+    assert result.success is False
+    assert result.details == "Unauthorized"

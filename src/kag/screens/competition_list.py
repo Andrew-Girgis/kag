@@ -50,7 +50,9 @@ class CompetitionListScreen(Screen):
     ]
 
     class Selected:
-        def __init__(self, competition: Competition, is_local: bool = False, project_path: str | None = None):
+        def __init__(
+            self, competition: Competition, is_local: bool = False, project_path: str | None = None
+        ):
             self.competition = competition
             self.is_local = is_local
             self.project_path = project_path
@@ -242,6 +244,8 @@ class CompetitionListScreen(Screen):
         error: str | None = None
         try:
             joined = list_entered_competitions()
+            for competition in joined:
+                competition.is_joined = True
             general, all_has_more = list_competitions_page(
                 group="general",
                 page=all_page,
@@ -313,7 +317,9 @@ class CompetitionListScreen(Screen):
         except Exception as exc:
             error = str(exc) or "Unknown Kaggle error"
             has_more = False
-        self.app.call_from_thread(self._on_more_loaded, next_page, new_competitions, has_more, error)
+        self.app.call_from_thread(
+            self._on_more_loaded, next_page, new_competitions, has_more, error
+        )
 
     def _on_more_loaded(
         self,
@@ -341,11 +347,13 @@ class CompetitionListScreen(Screen):
                 try:
                     mtime = entry.stat().st_mtime
                     days = (datetime.now().timestamp() - mtime) / 86400
-                    projects.append(LocalProject(
-                        name=entry.name,
-                        path=str(entry),
-                        modified_days_ago=days,
-                    ))
+                    projects.append(
+                        LocalProject(
+                            name=entry.name,
+                            path=str(entry),
+                            modified_days_ago=days,
+                        )
+                    )
                 except OSError:
                     continue
         return projects
@@ -375,7 +383,9 @@ class CompetitionListScreen(Screen):
             )
 
         if self.local_projects:
-            local_filtered = [p for p in self.local_projects if (not query or q_lower in p.name.lower())]
+            local_filtered = [
+                p for p in self.local_projects if (not query or q_lower in p.name.lower())
+            ]
             if local_filtered:
                 local_count = len(self.local_projects)
                 results.mount(
@@ -401,7 +411,8 @@ class CompetitionListScreen(Screen):
 
         if self.joined_competitions:
             joined_filtered = [
-                c for c in self.joined_competitions
+                c
+                for c in self.joined_competitions
                 if (not query or q_lower in c.slug.lower() or q_lower in c.title.lower())
             ]
             if joined_filtered:
@@ -428,7 +439,8 @@ class CompetitionListScreen(Screen):
 
         if self.all_competitions or self._all_has_more or self._all_loading_more:
             all_filtered = [
-                c for c in self.all_competitions
+                c
+                for c in self.all_competitions
                 if (not query or q_lower in c.slug.lower() or q_lower in c.title.lower())
             ]
             if all_filtered or self._all_has_more or self._all_loading_more:
@@ -595,7 +607,11 @@ class CompetitionListScreen(Screen):
                 reward="",
                 team_count="0",
             )
-            self.dismiss(CompetitionListScreen.Selected(competition, is_local=True, project_path=selected.path))
+            self.dismiss(
+                CompetitionListScreen.Selected(
+                    competition, is_local=True, project_path=selected.path
+                )
+            )
             return
 
         if isinstance(selected, Competition):
