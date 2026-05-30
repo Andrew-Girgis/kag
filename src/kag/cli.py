@@ -1,5 +1,6 @@
 import json
 import os
+import stat
 import sys
 import shutil
 import subprocess
@@ -10,6 +11,20 @@ from .config import Config
 
 
 RESULT_FILE = Path.home() / ".kag_result"
+
+
+def _safe_write_result(path: Path, content: str) -> None:
+    if path.is_symlink():
+        path.unlink()
+    fd = os.open(
+        str(path),
+        os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW,
+        stat.S_IRUSR | stat.S_IWUSR,
+    )
+    try:
+        os.write(fd, content.encode())
+    finally:
+        os.close(fd)
 
 
 def _kaggle_auth_status() -> tuple[bool, str]:
@@ -191,7 +206,9 @@ def doctor_command(json_output: bool = False) -> int:
 
     console.print(table)
     if has_failure:
-        console.print("\n[bold red]Doctor found issues.[/bold red] Fix FAIL rows and re-run `kag doctor`.")
+        console.print(
+            "\n[bold red]Doctor found issues.[/bold red] Fix FAIL rows and re-run `kag doctor`."
+        )
         return 1
     console.print("\n[bold green]All checks passed.[/bold green]")
     return 0
@@ -213,6 +230,7 @@ def main() -> None:
     error = check_kaggle_cli()
     if error:
         from rich.console import Console
+
         console = Console(stderr=True)
         console.print(f"[bold red]Error:[/bold red] {error}")
         sys.exit(1)
@@ -226,7 +244,7 @@ def main() -> None:
     result = app.result
 
     if result:
-        RESULT_FILE.write_text(result)
+        _safe_write_result(RESULT_FILE, result)
 
 
 if __name__ == "__main__":

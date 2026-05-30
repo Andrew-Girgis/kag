@@ -36,6 +36,7 @@ class Config:
         if config_path.exists():
             try:
                 import tomllib
+
                 with open(config_path, "rb") as f:
                     data = tomllib.load(f)
                 kag_path = Path(data.get("kag_path", str(kag_path)))

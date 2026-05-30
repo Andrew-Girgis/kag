@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from .config import Config
 from .kaggle_api import (
     Competition,
+    _is_valid_slug,
     check_competition_access,
     download_competition,
     get_competition_files,
@@ -239,7 +240,12 @@ def create_project(
     download_files: bool = True,
     editor: str | None = None,
 ) -> str | None:
-    project_dir = config.kag_path / competition.slug
+    dir_name = competition.safe_id
+    if not dir_name or not _is_valid_slug(dir_name):
+        raise ProjectCreationError(f"Invalid competition slug: {competition.slug!r}")
+    project_dir = (config.kag_path / dir_name).resolve()
+    if not str(project_dir).startswith(str(config.kag_path.resolve())):
+        raise ProjectCreationError(f"Invalid project path for slug: {competition.slug!r}")
     project_existed = project_dir.exists()
     project_dir.mkdir(parents=True, exist_ok=True)
 

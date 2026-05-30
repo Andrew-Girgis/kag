@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 
 
 BASE_WEB_URL = "https://www.kaggle.com"
@@ -31,7 +31,7 @@ def _competition_session(slug: str):
     import requests
 
     session = requests.Session()
-    overview_url = f"{BASE_WEB_URL}/competitions/{slug}/overview"
+    overview_url = f"{BASE_WEB_URL}/competitions/{quote(slug, safe='')}/overview"
     session.get(overview_url, timeout=20)
     xsrf_token = session.cookies.get("XSRF-TOKEN") or session.cookies.get("CSRF-TOKEN")
     headers = {
@@ -139,11 +139,13 @@ def fetch_competition_markdown_sections(slug: str) -> tuple[dict[str, str], list
 
     evaluation_algo = _format_evaluation_algorithm(competition.get("evaluationAlgorithm"))
     if evaluation_algo:
-        evaluation_parts.extend([
-            "### Evaluation Algorithm",
-            "",
-            str(evaluation_algo).strip(),
-        ])
+        evaluation_parts.extend(
+            [
+                "### Evaluation Algorithm",
+                "",
+                str(evaluation_algo).strip(),
+            ]
+        )
 
     for page in page_items:
         name = str(page.get("name") or "").strip()
@@ -151,7 +153,7 @@ def fetch_competition_markdown_sections(slug: str) -> tuple[dict[str, str], list
         content_html = page.get("content") or ""
         if not content_html:
             continue
-        page_url = f"{BASE_WEB_URL}/competitions/{slug}/overview"
+        page_url = f"{BASE_WEB_URL}/competitions/{quote(slug, safe='')}/overview"
         content_md = _html_to_markdown(content_html, page_url)
         if not content_md:
             continue
