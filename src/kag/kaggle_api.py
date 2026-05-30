@@ -1,20 +1,31 @@
 import csv
 import io
+import re
 import subprocess
 import time
 import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
 
+_SLUG_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,254}$")
+
 
 class KaggleFetchError(RuntimeError):
     pass
 
 
+def _is_valid_slug(slug: str) -> bool:
+    return bool(_SLUG_PATTERN.match(slug))
+
+
 def _extract_slug(ref: str) -> str:
     if ref.startswith("http"):
-        return ref.rstrip("/").split("/")[-1]
-    return ref
+        raw = ref.rstrip("/").split("/")[-1]
+    else:
+        raw = ref
+    if not _is_valid_slug(raw):
+        return "".join(c if c.isalnum() or c in "-_." else "-" for c in raw)[:255]
+    return raw
 
 
 def _humanize_slug(slug: str) -> str:
@@ -252,6 +263,11 @@ def open_competition_in_browser(slug: str) -> None:
 
 
 def open_competition_page(slug: str, page: str) -> None:
+    if not _is_valid_slug(slug):
+        return
+    allowed_pages = {"overview", "rules", "data", "code", "discussion", "leaderboard"}
+    if page not in allowed_pages:
+        return
     base = f"https://www.kaggle.com/competitions/{slug}"
     webbrowser.open_new_tab(f"{base}/{page}")
 

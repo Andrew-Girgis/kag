@@ -36,11 +36,13 @@ class EditorSelectScreen(Screen):
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         item_id = event.item.id
         if item_id == "editor-none":
-            self.dismiss(EditorSelectScreen.Selected(
-                competition=self.competition,
-                download_files=self.download_files,
-                editor=None,
-            ))
+            self.dismiss(
+                EditorSelectScreen.Selected(
+                    competition=self.competition,
+                    download_files=self.download_files,
+                    editor=None,
+                )
+            )
         elif item_id and item_id.startswith("editor-"):
             key = item_id.removeprefix("editor-")
             editor_cmd = None
@@ -48,11 +50,13 @@ class EditorSelectScreen(Screen):
                 if ed["key"] == key:
                     editor_cmd = ed["cmd"]
                     break
-            self.dismiss(EditorSelectScreen.Selected(
-                competition=self.competition,
-                download_files=self.download_files,
-                editor=editor_cmd,
-            ))
+            self.dismiss(
+                EditorSelectScreen.Selected(
+                    competition=self.competition,
+                    download_files=self.download_files,
+                    editor=editor_cmd,
+                )
+            )
 
     def action_cancel(self) -> None:
         self.dismiss(None)
