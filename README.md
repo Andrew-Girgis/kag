@@ -65,6 +65,8 @@ uv sync
 uv run kag --doctor
 ```
 
+Maintainer release planning lives in [`docs/release.md`](docs/release.md).
+
 ## Setup guide
 
 ### 1. Install kag
