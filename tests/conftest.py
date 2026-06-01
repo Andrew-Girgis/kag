@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from types import SimpleNamespace
 
 import pytest
+import requests
 
 
 @pytest.fixture(autouse=True)
@@ -19,6 +20,14 @@ def block_real_kaggle_cli(monkeypatch: pytest.MonkeyPatch) -> None:
         return real_run(cmd, *args, **kwargs)
 
     monkeypatch.setattr(subprocess, "run", guarded_run)
+
+
+@pytest.fixture(autouse=True)
+def block_real_http(monkeypatch: pytest.MonkeyPatch) -> None:
+    def blocked_request(*args: object, **kwargs: object) -> object:
+        raise AssertionError("tests must not make real HTTP requests")
+
+    monkeypatch.setattr(requests.sessions.Session, "request", blocked_request)
 
 
 @pytest.fixture
