@@ -11,6 +11,25 @@ from .config import Config
 
 RESULT_FILE = Path.home() / ".kag_result"
 
+HELP_TEXT = """Usage:
+  kag [query]
+  kag --init
+  kag --doctor [--json]
+  kag --version
+  kag --help
+
+Open a Kaggle competition picker and scaffold local workspaces.
+
+Arguments:
+  query             Optional initial competition search query.
+
+Options:
+  --init            Print optional shell integration for auto-cd.
+  --doctor          Run environment checks.
+  --json            With --doctor, print machine-readable checks.
+  --version         Show installed version.
+  --help, -h        Show this help message."""
+
 
 def _kaggle_auth_status() -> tuple[bool, str]:
     kaggle_json = Path.home() / ".kaggle" / "kaggle.json"
@@ -191,7 +210,9 @@ def doctor_command(json_output: bool = False) -> int:
 
     console.print(table)
     if has_failure:
-        console.print("\n[bold red]Doctor found issues.[/bold red] Fix FAIL rows and re-run `kag doctor`.")
+        console.print(
+            "\n[bold red]Doctor found issues.[/bold red] Fix FAIL rows and re-run `kag doctor`."
+        )
         return 1
     console.print("\n[bold green]All checks passed.[/bold green]")
     return 0
@@ -200,6 +221,9 @@ def doctor_command(json_output: bool = False) -> int:
 def main() -> None:
     args = sys.argv[1:]
 
+    if "--help" in args or "-h" in args:
+        print(HELP_TEXT)
+        return
     if "--init" in args:
         print(init_command())
         return
@@ -213,6 +237,7 @@ def main() -> None:
     error = check_kaggle_cli()
     if error:
         from rich.console import Console
+
         console = Console(stderr=True)
         console.print(f"[bold red]Error:[/bold red] {error}")
         sys.exit(1)
