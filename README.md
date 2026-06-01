@@ -133,6 +133,7 @@ kag                  # open TUI
 kag titanic          # open TUI with initial search query
 kag --doctor         # environment checks
 kag --version        # show installed version
+kag --help           # show CLI help
 ```
 
 ## Usage
@@ -144,7 +145,10 @@ kag --doctor         # environment checks
 kag --doctor --json  # machine-readable checks
 kag --version        # show installed version
 kag --init           # print optional shell integration
+kag --help           # show CLI help
 ```
+
+`kag --help` prints usage information without requiring Kaggle CLI authentication.
 
 ## How it works
 
