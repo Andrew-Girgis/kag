@@ -12,6 +12,7 @@ from kag.screens.editor_select import EditorSelectScreen
 from kag import screens
 from kag import tui
 from kag.tui import KagApp
+from kag.update_check import UpdateNotice
 
 
 def test_editor_selected_download_failure_does_not_set_result(
@@ -314,3 +315,30 @@ def test_access_required_skip_download_dismisses_without_download() -> None:
     assert dismissed[0] is not None
     assert dismissed[0].download_files is False
     assert competition.is_joined is False
+
+
+def test_update_notice_notifies_user(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    app = KagApp(Config(kag_path=tmp_path))
+    notifications: list[str] = []
+    notice = UpdateNotice(
+        current_version="0.1.0",
+        latest_version="0.1.1",
+        upgrade_hint="Run: uv tool upgrade kag",
+    )
+
+    monkeypatch.setattr(app, "notify", lambda message, **kwargs: notifications.append(message))
+
+    app._show_update_notice(notice)
+
+    assert notifications == ["kag 0.1.1 is available. You have 0.1.0. Run: uv tool upgrade kag"]
+
+
+def test_missing_update_notice_does_not_notify(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    app = KagApp(Config(kag_path=tmp_path))
+    notifications: list[str] = []
+
+    monkeypatch.setattr(app, "notify", lambda message, **kwargs: notifications.append(message))
+
+    app._show_update_notice(None)
+
+    assert notifications == []

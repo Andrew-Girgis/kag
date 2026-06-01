@@ -1,7 +1,9 @@
+from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import Header, Footer
 
+from . import __version__
 from .config import Config
 from .kaggle_api import check_competition_access
 from .screens.access_required import AccessRequiredScreen
@@ -9,6 +11,7 @@ from .screens.competition_list import CompetitionListScreen
 from .screens.editor_select import EditorSelectScreen
 from .screens.confirm_download import ConfirmDownloadScreen
 from .project import ProjectCreationError, create_project
+from .update_check import UpdateNotice, check_for_update
 
 
 class KagApp(App):
@@ -83,6 +86,18 @@ class KagApp(App):
             CompetitionListScreen(self.config, initial_query=self.initial_query),
             self._on_competition_selected,
         )
+        self._check_for_update()
+
+    @work(thread=True)
+    def _check_for_update(self) -> None:
+        notice = check_for_update(__version__, self.config)
+        if notice is not None:
+            self.call_from_thread(self._show_update_notice, notice)
+
+    def _show_update_notice(self, notice: UpdateNotice | None) -> None:
+        if notice is None:
+            return
+        self.notify(notice.message, severity="information", timeout=12)
 
     def _on_competition_selected(self, result: CompetitionListScreen.Selected | None) -> None:
         if result is None:
