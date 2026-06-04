@@ -60,6 +60,65 @@ def test_extract_zip_safely_skips_entries_that_escape_destination(tmp_path: Path
     assert all("Skipped unsafe archive entry" in warning for warning in warnings)
 
 
+def test_extract_zip_safely_does_not_write_outside_dest_via_cli_flow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    competition = Competition(
+        slug="malicious-zip",
+        title="Malicious Zip",
+        deadline="",
+        reward="",
+        team_count="0",
+    )
+
+    outside_marker = tmp_path / "pwned.txt"
+    outside_marker.unlink(missing_ok=True)
+
+    def fake_download(slug: str, data_dir: str) -> DownloadResult:
+        zip_path = Path(data_dir) / f"{slug}.zip"
+        _write_zip(
+            zip_path,
+            {
+                "train.csv": "id,val\n1,2\n",
+                "../pwned.txt": "you have been pwned\n",
+                "../../pwned.txt": "you have been pwned\n",
+                "/etc/shadow": "root:x\n",
+                "subdir/../../../pwned.txt": "you have been pwned\n",
+                "..\\pwned.txt": "you have been pwned\n",
+                "C:\\Windows\\System32\\evil.dll": "evil\n",
+            },
+        )
+        return DownloadResult(True, "Download completed", (f"{slug}.zip",))
+
+    monkeypatch.setattr(
+        project, "check_competition_access", lambda slug: (True, "Access confirmed")
+    )
+    monkeypatch.setattr(
+        project,
+        "list_competition_files",
+        lambda slug: FileListResult(True, (CompetitionFile("train.csv", 100),)),
+    )
+    monkeypatch.setattr(project, "download_competition", fake_download)
+    monkeypatch.setattr(project, "get_competition_files", lambda slug: ["train.csv"])
+    monkeypatch.setattr(project, "fetch_competition_markdown_sections", lambda slug: ({}, []))
+
+    project_path = project.create_project(
+        competition,
+        Config(kag_path=tmp_path, auto_git=False, auto_venv=False),
+    )
+
+    assert project_path is not None
+    assert (Path(project_path) / "data" / "train.csv").read_text() == "id,val\n1,2\n"
+
+    assert not outside_marker.exists()
+    assert not (tmp_path / "pwned.txt").exists()
+
+    notes = (Path(project_path) / "notes.md").read_text()
+    assert "## Extraction Warnings" in notes
+    assert notes.count("Skipped unsafe archive entry") == 6
+
+
 def test_extract_zip_safely_rejects_symlink_escape_parents(tmp_path: Path) -> None:
     zip_path = tmp_path / "symlink-parent.zip"
     data_dir = tmp_path / "data"
