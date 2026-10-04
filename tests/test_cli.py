@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from kag import cli
+from kag import __version__, cli
 
 
 def test_help_output_does_not_require_kaggle(
@@ -61,7 +61,7 @@ def test_version_output_is_not_mixed_with_update_notice(
 
     cli.main()
 
-    assert capsys.readouterr().out == "kag 0.1.0\n"
+    assert capsys.readouterr().out == f"kag {__version__}\n"
 
 
 def test_init_output_is_shell_code_only(
