@@ -400,3 +400,52 @@ def test_make_starter_notebook_caps_csv_loads() -> None:
 
     assert source.count("pd.read_csv") == project.MAX_NOTEBOOK_CSV_LOADS
     assert "# 5 more CSV files in data/" in source
+
+
+@pytest.mark.parametrize(
+    ("editor", "expected"),
+    [
+        ("jupyter", ["jupyter", "lab", "{project}/launch-test.ipynb"]),
+        ("code", ["code", "{project}"]),
+        ("zed", ["zed", "{project}"]),
+    ],
+)
+def test_create_project_launches_editor_with_expected_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    editor: str,
+    expected: list[str],
+) -> None:
+    competition = Competition(
+        slug="launch-test",
+        title="Launch Test",
+        deadline="",
+        reward="",
+        team_count="0",
+    )
+    popen_calls: list[tuple[list[str], dict[str, object]]] = []
+
+    monkeypatch.setattr(project, "get_competition_files", lambda slug: [])
+    monkeypatch.setattr(project, "fetch_competition_markdown_sections", lambda slug: ({}, []))
+    monkeypatch.setattr(project.shutil, "which", lambda cmd: f"/usr/bin/{cmd}")
+    monkeypatch.setattr(
+        project.subprocess,
+        "Popen",
+        lambda args, **kwargs: popen_calls.append((args, kwargs)),
+    )
+
+    project_path = project.create_project(
+        competition,
+        Config(kag_path=tmp_path, auto_git=False, auto_venv=False),
+        download_files=False,
+        editor=editor,
+    )
+
+    assert project_path is not None
+    assert [args for args, _ in popen_calls] == [
+        [part.format(project=project_path) for part in expected]
+    ]
+    _, kwargs = popen_calls[0]
+    assert kwargs["cwd"] == project_path
+    assert kwargs["start_new_session"] is True
+    assert kwargs["stdout"] is project.subprocess.DEVNULL

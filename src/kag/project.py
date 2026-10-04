@@ -270,6 +270,12 @@ def _extract_zip_safely(zip_path: Path, destination: Path) -> list[str]:
     return warnings
 
 
+def _editor_command(editor: str, project_dir: Path, notebook_path: Path) -> list[str]:
+    if editor == "jupyter":
+        return ["jupyter", "lab", str(notebook_path)]
+    return [editor, str(project_dir)]
+
+
 def _download_failure_message(slug: str, details: str) -> str:
     message = f"Download failed for {slug}: {details}"
     if "403" in details or "forbidden" in details.lower():
@@ -375,11 +381,13 @@ def create_project(
                 pass
 
         if editor and shutil.which(editor):
-            subprocess.Popen([editor, str(project_dir)], start_new_session=True)
-        elif editor == "jupyter" and shutil.which("jupyter"):
-            nb_path = str(notebook_path)
             subprocess.Popen(
-                ["jupyter", "lab", nb_path], cwd=str(project_dir), start_new_session=True
+                _editor_command(editor, project_dir, notebook_path),
+                cwd=str(project_dir),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
             )
 
         return str(project_dir)
