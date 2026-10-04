@@ -72,13 +72,86 @@ def test_list_competitions_page_allows_successful_empty_results(
     def empty_csv(*args: object, **kwargs: object) -> object:
         return completed_process(
             returncode=0,
-            stdout="ref,title,deadline,reward,teamsCount\n",
+            stdout="ref,deadline,category,reward,teamCount,userHasEntered,userRank\n",
             stderr="",
         )
 
     monkeypatch.setattr(kaggle_api.subprocess, "run", empty_csv)
 
     competitions, has_more = kaggle_api.list_competitions_page()
+
+    assert competitions == []
+    assert has_more is False
+
+
+def test_list_competitions_page_parses_real_cli_output(
+    monkeypatch: pytest.MonkeyPatch,
+    completed_process: type[SimpleNamespace],
+) -> None:
+    def cli_output(*args: object, **kwargs: object) -> object:
+        return completed_process(
+            returncode=0,
+            stdout=(
+                "Next Page Token = abc123\n"
+                "ref,deadline,category,reward,teamCount,userHasEntered,userRank\n"
+                "https://www.kaggle.com/competitions/titanic,2030-01-01 00:00:00,"
+                "Getting Started,Knowledge,15234,True,\n"
+                "playground-series-s6e6,2026-06-30 23:59:00,Playground,Swag,3120,False,\n"
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(kaggle_api.subprocess, "run", cli_output)
+
+    competitions, has_more = kaggle_api.list_competitions_page(page_size=20)
+
+    assert has_more is True
+    assert [competition.slug for competition in competitions] == [
+        "titanic",
+        "playground-series-s6e6",
+    ]
+    titanic, playground = competitions
+    assert titanic.team_count == "15234"
+    assert titanic.is_joined is True
+    assert titanic.reward == "Knowledge"
+    assert titanic.deadline == "2030-01-01 00:00:00"
+    assert playground.team_count == "3120"
+    assert playground.is_joined is False
+    assert playground.display_title == "Playground Series S6E6"
+
+
+def test_list_competitions_page_stops_paging_without_next_page_token(
+    monkeypatch: pytest.MonkeyPatch,
+    completed_process: type[SimpleNamespace],
+) -> None:
+    def last_page(*args: object, **kwargs: object) -> object:
+        return completed_process(
+            returncode=0,
+            stdout=(
+                "ref,deadline,category,reward,teamCount,userHasEntered,userRank\n"
+                "titanic,2030-01-01 00:00:00,Getting Started,Knowledge,15234,False,\n"
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(kaggle_api.subprocess, "run", last_page)
+
+    competitions, has_more = kaggle_api.list_competitions_page(page_size=20)
+
+    assert len(competitions) == 1
+    assert has_more is False
+
+
+def test_list_competitions_page_treats_no_competitions_message_as_empty(
+    monkeypatch: pytest.MonkeyPatch,
+    completed_process: type[SimpleNamespace],
+) -> None:
+    def no_results(*args: object, **kwargs: object) -> object:
+        return completed_process(returncode=0, stdout="No competitions found\n", stderr="")
+
+    monkeypatch.setattr(kaggle_api.subprocess, "run", no_results)
+
+    competitions, has_more = kaggle_api.list_competitions_page(search="nothing-matches")
 
     assert competitions == []
     assert has_more is False

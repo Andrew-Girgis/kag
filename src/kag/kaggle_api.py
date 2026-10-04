@@ -7,6 +7,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+NEXT_PAGE_TOKEN_PREFIX = "Next Page Token = "
+NO_COMPETITIONS_MESSAGE = "No competitions found"
+
+
 class KaggleFetchError(RuntimeError):
     pass
 
@@ -135,27 +139,32 @@ def list_competitions_page(
     except subprocess.TimeoutExpired as exc:
         raise KaggleFetchError("Kaggle competitions request timed out") from exc
 
+    stdout = result.stdout or ""
+    if stdout.strip() == NO_COMPETITIONS_MESSAGE:
+        return [], False
+
     competitions = []
-    reader = csv.DictReader(io.StringIO(result.stdout))
+    reader = csv.DictReader(io.StringIO(_csv_payload(stdout, "ref,")))
     if reader.fieldnames is None:
         raise KaggleFetchError("Kaggle competitions response was not valid CSV")
     if "ref" not in reader.fieldnames:
         raise KaggleFetchError("Kaggle competitions response was not valid CSV")
     for row in reader:
-        ref = row.get("ref", "").strip()
+        ref = (row.get("ref") or "").strip()
         if not ref:
             continue
         slug = _extract_slug(ref)
         competitions.append(
             Competition(
                 slug=slug,
-                title=row.get("title", slug).strip(),
-                deadline=row.get("deadline", "").strip(),
-                reward=row.get("reward", "").strip(),
-                team_count=row.get("teamsCount", "0").strip(),
+                title=(row.get("title") or slug).strip(),
+                deadline=(row.get("deadline") or "").strip(),
+                reward=(row.get("reward") or "").strip(),
+                team_count=(row.get("teamCount") or "0").strip(),
+                is_joined=(row.get("userHasEntered") or "").strip().lower() == "true",
             )
         )
-    has_more = len(competitions) >= page_size
+    has_more = NEXT_PAGE_TOKEN_PREFIX in stdout or len(competitions) >= page_size
     return competitions, has_more
 
 
