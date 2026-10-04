@@ -9,6 +9,8 @@ from pathlib import Path
 
 NEXT_PAGE_TOKEN_PREFIX = "Next Page Token = "
 NO_COMPETITIONS_MESSAGE = "No competitions found"
+FILE_LIST_PAGE_SIZE = 200
+MAX_FILE_LIST_PAGES = 50
 
 
 class KaggleFetchError(RuntimeError):
@@ -89,6 +91,7 @@ class FileListResult:
     success: bool
     files: tuple[CompetitionFile, ...] = ()
     details: str = ""
+    truncated: bool = False
 
 
 def _first_detail_line(stdout: str, stderr: str) -> str:
@@ -104,6 +107,15 @@ def _csv_payload(text: str, expected_header: str) -> str:
         if line.startswith(expected_header):
             return "\n".join(lines[index:])
     return text
+
+
+def _next_page_token(text: str, expected_header: str) -> str | None:
+    for line in text.splitlines():
+        if line.startswith(expected_header):
+            return None
+        if line.startswith(NEXT_PAGE_TOKEN_PREFIX):
+            return line.removeprefix(NEXT_PAGE_TOKEN_PREFIX).strip() or None
+    return None
 
 
 def list_competitions_page(
@@ -164,7 +176,7 @@ def list_competitions_page(
                 is_joined=(row.get("userHasEntered") or "").strip().lower() == "true",
             )
         )
-    has_more = NEXT_PAGE_TOKEN_PREFIX in stdout or len(competitions) >= page_size
+    has_more = _next_page_token(stdout, "ref,") is not None or len(competitions) >= page_size
     return competitions, has_more
 
 
@@ -188,28 +200,55 @@ def list_entered_competitions() -> list[Competition]:
 
 
 def list_competition_files(slug: str) -> FileListResult:
-    cmd = ["kaggle", "competitions", "files", "-v", slug]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        if result.returncode != 0:
-            details = _first_detail_line(result.stdout, result.stderr)
-            return FileListResult(False, details=details or "Competition files could not be listed")
-    except subprocess.TimeoutExpired:
-        return FileListResult(False, details="Kaggle files request timed out")
-    except FileNotFoundError:
-        return FileListResult(False, details="kaggle CLI not found")
+    files: list[CompetitionFile] = []
+    page_token: str | None = None
+    seen_tokens: set[str] = set()
 
-    files = []
-    reader = csv.DictReader(io.StringIO(_csv_payload(result.stdout, "name,")))
-    if reader.fieldnames is None or "name" not in reader.fieldnames:
-        return FileListResult(False, details="Kaggle files response was not valid CSV")
-    for row in reader:
-        name = row.get("name", "").strip()
-        if name:
-            size_text = row.get("size", "").strip()
-            size = int(size_text) if size_text.isdigit() else None
-            files.append(CompetitionFile(name=name, size=size))
-    return FileListResult(True, tuple(files))
+    for _ in range(MAX_FILE_LIST_PAGES):
+        cmd = [
+            "kaggle",
+            "competitions",
+            "files",
+            "-v",
+            slug,
+            "--page-size",
+            str(FILE_LIST_PAGE_SIZE),
+        ]
+        if page_token:
+            cmd.extend(["--page-token", page_token])
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode != 0:
+                details = _first_detail_line(result.stdout, result.stderr)
+                return FileListResult(
+                    False, details=details or "Competition files could not be listed"
+                )
+        except subprocess.TimeoutExpired:
+            return FileListResult(False, details="Kaggle files request timed out")
+        except FileNotFoundError:
+            return FileListResult(False, details="kaggle CLI not found")
+
+        reader = csv.DictReader(io.StringIO(_csv_payload(result.stdout, "name,")))
+        if reader.fieldnames is None or "name" not in reader.fieldnames:
+            return FileListResult(False, details="Kaggle files response was not valid CSV")
+        for row in reader:
+            name = (row.get("name") or "").strip()
+            if name:
+                size_text = (row.get("size") or "").strip()
+                size = int(size_text) if size_text.isdigit() else None
+                files.append(CompetitionFile(name=name, size=size))
+
+        page_token = _next_page_token(result.stdout, "name,")
+        if page_token is None or page_token in seen_tokens:
+            return FileListResult(True, tuple(files))
+        seen_tokens.add(page_token)
+
+    return FileListResult(
+        True,
+        tuple(files),
+        details=f"Listing stopped after {len(files)} files",
+        truncated=True,
+    )
 
 
 def get_competition_files(slug: str) -> list[str]:
