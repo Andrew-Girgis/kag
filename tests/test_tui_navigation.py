@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import pytest
@@ -7,7 +8,7 @@ from textual.widgets import Input, ListView
 
 from kag.config import Config
 from kag.kaggle_api import Competition, CompetitionFile, FileListResult
-from kag.screens import competition_list, confirm_download, existing_project
+from kag.screens import access_required, competition_list, confirm_download, existing_project
 from kag.screens.access_required import AccessRequiredScreen
 from kag.screens.competition_list import CompetitionListScreen
 from kag.screens.confirm_download import ConfirmDownloadScreen
@@ -247,3 +248,94 @@ def test_describe_data_dir_caps_file_count(tmp_path: Path) -> None:
         existing_project._describe_data_dir(data_dir)
         == f"{existing_project.DATA_FILE_COUNT_LIMIT}+ files"
     )
+
+
+@pytest.mark.asyncio
+async def test_access_retry_runs_off_the_ui_thread(
+    tmp_path: Path,
+    stub_kaggle: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    check_threads: list[threading.Thread] = []
+
+    def record_check(slug: str) -> tuple[bool, str]:
+        check_threads.append(threading.current_thread())
+        return True, "Access confirmed"
+
+    monkeypatch.setattr(access_required, "check_competition_access", record_check)
+    app = KagApp(Config(kag_path=tmp_path), initial_query="tide")
+
+    async with app.run_test() as pilot:
+        await pilot.pause(0.3)
+        app.screen.query_one("#search", Input).focus()
+        await pilot.press("down", "enter")
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, AccessRequiredScreen)
+
+        await pilot.press("down", "enter")
+        await pilot.pause(0.3)
+
+        assert check_threads
+        assert check_threads[0] is not threading.main_thread()
+        assert isinstance(app.screen, ConfirmDownloadScreen)
+
+
+@pytest.mark.asyncio
+async def test_download_confirm_checks_access_in_background_when_listing_failed(
+    tmp_path: Path,
+    stub_kaggle: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    check_threads: list[threading.Thread] = []
+
+    def record_check(slug: str) -> tuple[bool, str]:
+        check_threads.append(threading.current_thread())
+        return False, "403 Forbidden"
+
+    monkeypatch.setattr(
+        confirm_download,
+        "list_competition_files",
+        lambda slug: FileListResult(False, details="403 Forbidden"),
+    )
+    monkeypatch.setattr(confirm_download, "check_competition_access", record_check)
+    app = KagApp(Config(kag_path=tmp_path), initial_query="tita")
+
+    async with app.run_test() as pilot:
+        await pilot.pause(0.3)
+        app.screen.query_one("#search", Input).focus()
+        await pilot.press("down", "enter")
+        await pilot.pause(0.3)
+        assert isinstance(app.screen, ConfirmDownloadScreen)
+
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+
+        assert check_threads
+        assert check_threads[0] is not threading.main_thread()
+        assert isinstance(app.screen, AccessRequiredScreen)
+        assert app.screen.details == "403 Forbidden"
+
+
+@pytest.mark.asyncio
+async def test_download_confirm_reuses_successful_file_listing(
+    tmp_path: Path,
+    stub_kaggle: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_if_called(slug: str) -> tuple[bool, str]:
+        raise AssertionError("listing already confirmed access")
+
+    monkeypatch.setattr(confirm_download, "check_competition_access", fail_if_called)
+    app = KagApp(Config(kag_path=tmp_path), initial_query="tita")
+
+    async with app.run_test() as pilot:
+        await pilot.pause(0.3)
+        app.screen.query_one("#search", Input).focus()
+        await pilot.press("down", "enter")
+        await pilot.pause(0.3)
+        assert isinstance(app.screen, ConfirmDownloadScreen)
+
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert isinstance(app.screen, EditorSelectScreen)

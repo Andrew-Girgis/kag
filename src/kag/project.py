@@ -429,7 +429,7 @@ def create_project(
                 )
 
         return str(project_dir)
-    except ProjectCreationError:
+    except Exception:
         if not project_existed:
             shutil.rmtree(project_dir, ignore_errors=True)
         raise

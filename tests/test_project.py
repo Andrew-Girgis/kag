@@ -613,3 +613,24 @@ def test_extract_zip_safely_keeps_existing_files(tmp_path: Path) -> None:
     assert len(warnings) == 1
     assert "Kept 1 existing file" in warnings[0]
     assert "train.csv" in warnings[0]
+
+
+def test_create_project_removes_new_project_after_unexpected_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_project_sources(monkeypatch)
+
+    def broken_notebook(*args: object, **kwargs: object) -> dict:
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(project, "make_starter_notebook", broken_notebook)
+
+    with pytest.raises(OSError):
+        project.create_project(
+            _existing_competition(),
+            Config(kag_path=tmp_path, auto_git=False, auto_venv=False),
+            download_files=False,
+        )
+
+    assert not (tmp_path / "titanic").exists()
