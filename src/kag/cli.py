@@ -52,14 +52,14 @@ def _has_text(path: Path) -> bool:
         return False
 
 
-def _kaggle_json_status(path: Path) -> tuple[bool, str]:
+def _read_kaggle_json(path: Path) -> tuple[dict[str, object], str | None]:
     try:
         data = json.loads(path.read_text())
     except (OSError, ValueError):
-        return False, f"{path} is empty or not valid JSON"
-    if isinstance(data, dict) and data.get("username") and data.get("key"):
-        return True, f"{path} (legacy)"
-    return False, f"{path} is missing username or key"
+        return {}, f"{path} is empty or not valid JSON"
+    if not isinstance(data, dict):
+        return {}, f"{path} is not a JSON object"
+    return data, None
 
 
 def _kaggle_auth_status() -> tuple[bool, str]:
@@ -71,16 +71,26 @@ def _kaggle_auth_status() -> tuple[bool, str]:
         token_path = kaggle_home / token_name
         if _has_text(token_path):
             return True, str(token_path)
-    if os.environ.get("KAGGLE_USERNAME") and os.environ.get("KAGGLE_KEY"):
-        return True, "KAGGLE_USERNAME + KAGGLE_KEY"
 
     problems: list[str] = []
+    file_values: dict[str, object] = {}
     kaggle_json = _kaggle_config_dir() / "kaggle.json"
     if kaggle_json.exists():
-        json_ok, json_details = _kaggle_json_status(kaggle_json)
-        if json_ok:
-            return True, json_details
-        problems.append(json_details)
+        file_values, problem = _read_kaggle_json(kaggle_json)
+        if problem:
+            problems.append(problem)
+
+    env_username = os.environ.get("KAGGLE_USERNAME")
+    env_key = os.environ.get("KAGGLE_KEY")
+    if (env_username or file_values.get("username")) and (env_key or file_values.get("key")):
+        if env_username and env_key:
+            return True, "KAGGLE_USERNAME + KAGGLE_KEY"
+        if not env_username and not env_key:
+            return True, f"{kaggle_json} (legacy)"
+        env_name = "KAGGLE_USERNAME" if env_username else "KAGGLE_KEY"
+        return True, f"{kaggle_json} + {env_name} (legacy)"
+    if kaggle_json.exists() and not problems:
+        problems.append(f"{kaggle_json} is missing username or key")
 
     oauth_credentials = kaggle_home / "credentials.json"
     if _has_text(oauth_credentials):

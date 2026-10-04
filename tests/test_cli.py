@@ -180,6 +180,39 @@ def test_auth_status_accepts_environment_credentials(
     assert cli._kaggle_auth_status() == (True, "KAGGLE_USERNAME + KAGGLE_KEY")
 
 
+@pytest.mark.parametrize(
+    ("file_values", "env", "expected_suffix"),
+    [
+        ('{"username": "someone"}', {"KAGGLE_KEY": "abc"}, "+ KAGGLE_KEY (legacy)"),
+        ('{"key": "abc"}', {"KAGGLE_USERNAME": "someone"}, "+ KAGGLE_USERNAME (legacy)"),
+    ],
+)
+def test_auth_status_merges_kaggle_json_with_environment(
+    kaggle_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    file_values: str,
+    env: dict[str, str],
+    expected_suffix: str,
+) -> None:
+    _write(kaggle_home / ".kaggle" / "kaggle.json", file_values)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+
+    ok, details = cli._kaggle_auth_status()
+
+    assert ok is True
+    assert details.endswith(expected_suffix)
+
+
+def test_auth_status_reports_incomplete_kaggle_json_without_env(kaggle_home: Path) -> None:
+    _write(kaggle_home / ".kaggle" / "kaggle.json", '{"key": "abc"}')
+
+    ok, details = cli._kaggle_auth_status()
+
+    assert ok is False
+    assert "missing username or key" in details
+
+
 def test_check_kaggle_cli_does_not_block_on_missing_static_credentials(
     kaggle_home: Path,
     monkeypatch: pytest.MonkeyPatch,
