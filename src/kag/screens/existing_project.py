@@ -21,7 +21,9 @@ def _describe_data_dir(data_dir: Path) -> str:
             count += 1
             if count >= DATA_FILE_COUNT_LIMIT:
                 return f"{DATA_FILE_COUNT_LIMIT}+ files"
-    return f"{count} files" if count else "empty"
+    if count == 0:
+        return "empty"
+    return f"{count} file" if count == 1 else f"{count} files"
 
 
 class ExistingProjectScreen(Screen):

@@ -4,9 +4,12 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import unicodedata
 import zipfile
+from collections.abc import Callable
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from typing import BinaryIO
 
 from .config import Config
 from .kaggle_api import (
@@ -23,6 +26,10 @@ class ProjectCreationError(RuntimeError):
     pass
 
 
+class ProjectCreationCancelled(ProjectCreationError):
+    pass
+
+
 STARTER_NOTEBOOK = {
     "nbformat": 4,
     "nbformat_minor": 5,
@@ -35,6 +42,7 @@ STARTER_NOTEBOOK = {
 
 
 MAX_NOTEBOOK_CSV_LOADS = 10
+EXTRACT_CHUNK_SIZE = 1024 * 1024
 EDITOR_LOG_DIR = Path(".kag") / "logs"
 RESERVED_NOTEBOOK_NAMES = {"pd", "np", "plt", "sns", "data_path", "train_test_split"}
 
@@ -247,7 +255,21 @@ def _safe_zip_target(member_name: str, destination: Path) -> Path | None:
     return target
 
 
-def _extract_zip_safely(zip_path: Path, destination: Path) -> list[str]:
+def _copy_with_cancel(source: BinaryIO, output: BinaryIO, cancel: threading.Event | None) -> None:
+    while True:
+        if cancel is not None and cancel.is_set():
+            raise ProjectCreationCancelled("Project setup cancelled")
+        chunk = source.read(EXTRACT_CHUNK_SIZE)
+        if not chunk:
+            return
+        output.write(chunk)
+
+
+def _extract_zip_safely(
+    zip_path: Path,
+    destination: Path,
+    cancel: threading.Event | None = None,
+) -> list[str]:
     warnings: list[str] = []
     destination.mkdir(parents=True, exist_ok=True)
 
@@ -272,7 +294,7 @@ def _extract_zip_safely(zip_path: Path, destination: Path) -> list[str]:
                 kept_existing.append(member.filename)
                 continue
             with archive.open(member, "r") as source, output:
-                shutil.copyfileobj(source, output)
+                _copy_with_cancel(source, output, cancel)
 
     if kept_existing:
         warnings.append(
@@ -309,6 +331,28 @@ def existing_project_dir(config: Config, slug: str) -> Path | None:
     return None
 
 
+def format_bytes(size: int) -> str:
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            return f"{int(value)} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} GB"
+
+
+def _remove_new_paths(directory: Path, existing: set[Path]) -> None:
+    for path in sorted(directory.rglob("*"), reverse=True):
+        if path in existing:
+            continue
+        try:
+            if path.is_dir() and not path.is_symlink():
+                path.rmdir()
+            else:
+                path.unlink()
+        except OSError:
+            continue
+
+
 def _write_if_missing(path: Path, content: str) -> bool:
     if path.exists():
         return False
@@ -321,19 +365,36 @@ def create_project(
     config: Config,
     download_files: bool = True,
     editor: str | None = None,
+    progress: Callable[[str], None] | None = None,
+    cancel: threading.Event | None = None,
 ) -> str | None:
+    def report(message: str) -> None:
+        if progress is not None:
+            progress(message)
+
+    def check_cancel() -> None:
+        if cancel is not None and cancel.is_set():
+            raise ProjectCreationCancelled("Project setup cancelled")
+
     project_dir = config.kag_path / competition.slug
     project_existed = project_dir.exists()
     project_had_content = existing_project_dir(config, competition.slug) is not None
+    existing_paths = set(project_dir.rglob("*")) if project_existed else set()
     project_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        sections, extract_warnings = fetch_competition_markdown_sections(competition.slug)
+        check_cancel()
+        report("Fetching competition notes...")
+        sections, extract_warnings = fetch_competition_markdown_sections(
+            competition.slug, cancel=cancel
+        )
+        check_cancel()
         access_note = None
         download_permitted = download_files
         listed_files: list[str] | None = None
 
         if download_files:
+            report("Checking access and data files...")
             access_ok, access_details = check_competition_access(competition.slug)
             if not access_ok:
                 raise ProjectCreationError(
@@ -345,18 +406,29 @@ def create_project(
                 if not listed_files:
                     download_permitted = False
 
+        check_cancel()
         if download_permitted:
             data_dir = project_dir / "data"
             data_dir.mkdir(exist_ok=True)
-            download_result = download_competition(competition.slug, str(data_dir))
+            report("Downloading data...")
+            download_result = download_competition(
+                competition.slug,
+                str(data_dir),
+                progress=lambda size: report(f"Downloading data... {format_bytes(size)}"),
+                cancel=cancel,
+            )
             if not download_result.success:
+                if download_result.cancelled:
+                    raise ProjectCreationCancelled("Project setup cancelled")
                 raise ProjectCreationError(
                     _download_failure_message(competition.slug, download_result.details)
                 )
 
             zip_files = list(data_dir.glob("*.zip"))
             for zf in zip_files:
-                extract_warnings.extend(_extract_zip_safely(zf, data_dir))
+                check_cancel()
+                report(f"Extracting {zf.name}...")
+                extract_warnings.extend(_extract_zip_safely(zf, data_dir, cancel=cancel))
 
         if listed_files is not None:
             files = listed_files
@@ -367,6 +439,8 @@ def create_project(
                 else []
             )
 
+        check_cancel()
+        report("Writing notebook and notes...")
         notebook_description = _overview_snippet(sections)
 
         notebook = make_starter_notebook(competition.slug, notebook_description, files)
@@ -382,7 +456,9 @@ def create_project(
         )
         _write_if_missing(project_dir / "notes.md", notes)
 
+        check_cancel()
         if config.auto_git and not project_had_content:
+            report("Setting up git...")
             try:
                 subprocess.run(
                     ["git", "init"], cwd=str(project_dir), capture_output=True, timeout=10
@@ -405,6 +481,7 @@ def create_project(
                 pass
 
         if config.auto_venv and not (project_dir / ".venv").exists():
+            report("Creating virtual environment...")
             try:
                 subprocess.run(
                     [sys.executable, "-m", "venv", ".venv"],
@@ -415,7 +492,9 @@ def create_project(
             except Exception:
                 pass
 
+        check_cancel()
         if editor and shutil.which(editor):
+            report(f"Opening {editor}...")
             log_path = _editor_log_path(project_dir, editor)
             log_path.parent.mkdir(parents=True, exist_ok=True)
             with log_path.open("ab") as log_file:
@@ -430,6 +509,8 @@ def create_project(
 
         return str(project_dir)
     except Exception:
-        if not project_existed:
+        if project_existed:
+            _remove_new_paths(project_dir, existing_paths)
+        else:
             shutil.rmtree(project_dir, ignore_errors=True)
         raise

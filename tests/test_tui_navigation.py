@@ -8,10 +8,18 @@ from textual.widgets import Input, ListView
 
 from kag.config import Config
 from kag.kaggle_api import Competition, CompetitionFile, FileListResult
-from kag.screens import access_required, competition_list, confirm_download, existing_project
+from kag.project import ProjectCreationCancelled
+from kag.screens import (
+    access_required,
+    competition_list,
+    confirm_download,
+    creating_project,
+    existing_project,
+)
 from kag.screens.access_required import AccessRequiredScreen
 from kag.screens.competition_list import CompetitionListScreen
 from kag.screens.confirm_download import ConfirmDownloadScreen
+from kag.screens.creating_project import CreatingProjectScreen
 from kag.screens.editor_select import EditorSelectScreen
 from kag.screens.existing_project import ExistingProjectScreen
 from kag.tui import KagApp
@@ -238,6 +246,9 @@ def test_describe_data_dir_caps_file_count(tmp_path: Path) -> None:
     assert existing_project._describe_data_dir(data_dir) == "missing"
     data_dir.mkdir()
     assert existing_project._describe_data_dir(data_dir) == "empty"
+    (data_dir / "only.csv").write_text("x")
+    assert existing_project._describe_data_dir(data_dir) == "1 file"
+    (data_dir / "only.csv").unlink()
     for index in range(3):
         (data_dir / f"{index}.csv").write_text("x")
     assert existing_project._describe_data_dir(data_dir) == "3 files"
@@ -339,3 +350,142 @@ async def test_download_confirm_reuses_successful_file_listing(
         await pilot.pause(0.2)
 
         assert isinstance(app.screen, EditorSelectScreen)
+
+
+async def _reach_editor_select(app: KagApp, pilot: object) -> None:
+    await pilot.pause(0.3)  # type: ignore[attr-defined]
+    app.screen.query_one("#search", Input).focus()
+    await pilot.press("down", "enter")  # type: ignore[attr-defined]
+    await pilot.pause(0.3)  # type: ignore[attr-defined]
+    assert isinstance(app.screen, ConfirmDownloadScreen)
+    await pilot.press("enter")  # type: ignore[attr-defined]
+    await pilot.pause(0.2)  # type: ignore[attr-defined]
+    assert isinstance(app.screen, EditorSelectScreen)
+
+
+def _select_terminal_only(app: KagApp) -> None:
+    editors = app.screen.query_one("#editor-list", ListView)
+    for index, child in enumerate(editors.children):
+        if child.id == "editor-none":
+            editors.index = index
+    editors.focus()
+
+
+@pytest.mark.asyncio
+async def test_project_creation_runs_in_background_and_exits_into_project(
+    tmp_path: Path,
+    stub_kaggle: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker_threads: list[threading.Thread] = []
+    seen_status: list[str] = []
+
+    def fake_create_project(**kwargs: object) -> str:
+        worker_threads.append(threading.current_thread())
+        kwargs["progress"]("Downloading data... 1.0 MB")  # type: ignore[operator]
+        return str(tmp_path / "titanic")
+
+    monkeypatch.setattr(creating_project, "create_project", fake_create_project)
+    app = KagApp(Config(kag_path=tmp_path), initial_query="tita")
+    original_set_status = creating_project.CreatingProjectScreen._set_status
+
+    def record_status(self: creating_project.CreatingProjectScreen, message: str) -> None:
+        seen_status.append(message)
+        original_set_status(self, message)
+
+    monkeypatch.setattr(creating_project.CreatingProjectScreen, "_set_status", record_status)
+
+    async with app.run_test() as pilot:
+        await _reach_editor_select(app, pilot)
+        _select_terminal_only(app)
+        await pilot.press("enter")
+        await pilot.pause(0.5)
+
+    assert worker_threads and worker_threads[0] is not threading.main_thread()
+    assert "Downloading data... 1.0 MB" in seen_status
+    assert app.result == str(tmp_path / "titanic")
+
+
+@pytest.mark.asyncio
+async def test_escape_cancels_project_creation_and_returns_to_picker(
+    tmp_path: Path,
+    stub_kaggle: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = threading.Event()
+
+    def slow_create_project(**kwargs: object) -> str:
+        cancel = kwargs["cancel"]
+        started.set()
+        assert cancel.wait(timeout=5)  # type: ignore[attr-defined]
+        raise ProjectCreationCancelled("Project setup cancelled")
+
+    monkeypatch.setattr(creating_project, "create_project", slow_create_project)
+    app = KagApp(Config(kag_path=tmp_path), initial_query="tita")
+
+    async with app.run_test() as pilot:
+        await _reach_editor_select(app, pilot)
+        _select_terminal_only(app)
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+        assert started.is_set()
+        assert isinstance(app.screen, CreatingProjectScreen)
+
+        await pilot.press("escape")
+        await pilot.pause(0.4)
+
+        assert isinstance(app.screen, CompetitionListScreen)
+        assert app.result is None
+
+
+@pytest.mark.asyncio
+async def test_project_creation_error_returns_to_download_prompt(
+    tmp_path: Path,
+    stub_kaggle: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def broken_create_project(**kwargs: object) -> str:
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(creating_project, "create_project", broken_create_project)
+    app = KagApp(Config(kag_path=tmp_path), initial_query="tita")
+
+    async with app.run_test() as pilot:
+        await _reach_editor_select(app, pilot)
+        _select_terminal_only(app)
+        await pilot.press("enter")
+        await pilot.pause(0.4)
+
+        assert isinstance(app.screen, ConfirmDownloadScreen)
+        assert app.result is None
+
+
+@pytest.mark.asyncio
+async def test_quitting_during_project_creation_signals_cancel(
+    tmp_path: Path,
+    stub_kaggle: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = threading.Event()
+    saw_cancel = threading.Event()
+
+    def slow_create_project(**kwargs: object) -> str:
+        cancel = kwargs["cancel"]
+        started.set()
+        if cancel.wait(timeout=5):  # type: ignore[attr-defined]
+            saw_cancel.set()
+        raise ProjectCreationCancelled("Project setup cancelled")
+
+    monkeypatch.setattr(creating_project, "create_project", slow_create_project)
+    app = KagApp(Config(kag_path=tmp_path), initial_query="tita")
+
+    async with app.run_test() as pilot:
+        await _reach_editor_select(app, pilot)
+        _select_terminal_only(app)
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+        assert started.is_set()
+        await pilot.press("q")
+        await pilot.pause(0.3)
+
+    assert saw_cancel.wait(timeout=2)

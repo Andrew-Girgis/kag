@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from urllib.parse import urljoin
 
 
@@ -94,16 +95,26 @@ def _format_evaluation_algorithm(value) -> str:
     return str(value)
 
 
-def fetch_competition_markdown_sections(slug: str) -> tuple[dict[str, str], list[str]]:
+def fetch_competition_markdown_sections(
+    slug: str,
+    cancel: threading.Event | None = None,
+) -> tuple[dict[str, str], list[str]]:
     sections: dict[str, str] = {}
     warnings: list[str] = []
 
+    def cancelled() -> bool:
+        return cancel is not None and cancel.is_set()
+
+    if cancelled():
+        return sections, warnings
     try:
         session, headers = _competition_session(slug)
     except Exception as exc:
         warnings.append(f"Failed to create Kaggle web session: {exc}")
         return sections, warnings
 
+    if cancelled():
+        return sections, warnings
     competition = _post_api(
         session,
         headers,
@@ -119,6 +130,8 @@ def fetch_competition_markdown_sections(slug: str) -> tuple[dict[str, str], list
         warnings.append("Competition ID missing from Kaggle API response")
         return sections, warnings
 
+    if cancelled():
+        return sections, warnings
     pages_response = _post_api(
         session,
         headers,
@@ -139,11 +152,13 @@ def fetch_competition_markdown_sections(slug: str) -> tuple[dict[str, str], list
 
     evaluation_algo = _format_evaluation_algorithm(competition.get("evaluationAlgorithm"))
     if evaluation_algo:
-        evaluation_parts.extend([
-            "### Evaluation Algorithm",
-            "",
-            str(evaluation_algo).strip(),
-        ])
+        evaluation_parts.extend(
+            [
+                "### Evaluation Algorithm",
+                "",
+                str(evaluation_algo).strip(),
+            ]
+        )
 
     for page in page_items:
         name = str(page.get("name") or "").strip()
@@ -196,6 +211,8 @@ def fetch_competition_markdown_sections(slug: str) -> tuple[dict[str, str], list
         },
         "readMask": "pinnedKernels",
     }
+    if cancelled():
+        return sections, warnings
     kernels_response = _post_api(
         session,
         headers,
