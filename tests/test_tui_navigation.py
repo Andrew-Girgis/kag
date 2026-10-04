@@ -246,6 +246,9 @@ def test_describe_data_dir_caps_file_count(tmp_path: Path) -> None:
     assert existing_project._describe_data_dir(data_dir) == "missing"
     data_dir.mkdir()
     assert existing_project._describe_data_dir(data_dir) == "empty"
+    (data_dir / "only.csv").write_text("x")
+    assert existing_project._describe_data_dir(data_dir) == "1 file"
+    (data_dir / "only.csv").unlink()
     for index in range(3):
         (data_dir / f"{index}.csv").write_text("x")
     assert existing_project._describe_data_dir(data_dir) == "3 files"
