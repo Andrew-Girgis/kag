@@ -1,7 +1,10 @@
 import json
+import keyword
+import re
 import shutil
 import subprocess
 import sys
+import unicodedata
 import zipfile
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
@@ -31,6 +34,56 @@ STARTER_NOTEBOOK = {
 }
 
 
+MAX_NOTEBOOK_CSV_LOADS = 10
+RESERVED_NOTEBOOK_NAMES = {"pd", "np", "plt", "sns", "data_path", "train_test_split"}
+
+
+def _csv_variable_name(file_name: str, used: set[str]) -> str:
+    stem = PurePosixPath(file_name).name.removesuffix(".csv")
+    normalized = unicodedata.normalize("NFKC", stem).lower()
+    cleaned = "".join(char if f"_{char}".isidentifier() else "_" for char in normalized)
+    base = re.sub(r"_+", "_", cleaned).strip("_") or "df"
+    if not base.isidentifier() or keyword.iskeyword(base) or base in RESERVED_NOTEBOOK_NAMES:
+        base = f"df_{base}"
+    name = base
+    suffix = 2
+    while name in used:
+        name = f"{base}_{suffix}"
+        suffix += 1
+    used.add(name)
+    return name
+
+
+def _data_loading_source(files: list[str]) -> str:
+    csv_files = [
+        name.replace("\\", "/").removesuffix(".zip")
+        for name in files
+        if name.removesuffix(".zip").lower().endswith(".csv")
+    ]
+    lines = ['data_path = "data/"']
+
+    if not csv_files:
+        lines.extend(["", "import os", "", "sorted(os.listdir(data_path))"])
+        return "\n".join(lines)
+
+    used: set[str] = set()
+    variables: list[str] = []
+    for csv_file in csv_files[:MAX_NOTEBOOK_CSV_LOADS]:
+        variable = _csv_variable_name(csv_file, used)
+        variables.append(variable)
+        lines.append(
+            f"{variable} = pd.read_csv(data_path + {json.dumps(csv_file, ensure_ascii=False)})"
+        )
+
+    remaining = len(csv_files) - MAX_NOTEBOOK_CSV_LOADS
+    if remaining > 0:
+        lines.append(f"# {remaining} more CSV files in data/")
+
+    preview = "train" if "train" in variables else variables[0]
+    lines.extend(["", f"{preview}.head()"])
+    return "\n".join(lines)
+
+
 def make_starter_notebook(competition_slug: str, description: str, files: list[str]) -> dict:
     nb = json.loads(json.dumps(STARTER_NOTEBOOK))
 
@@ -54,22 +107,13 @@ def make_starter_notebook(competition_slug: str, description: str, files: list[s
         }
     )
 
-    data_path = '"data/"'
     nb["cells"].append({"cell_type": "markdown", "metadata": {}, "source": ["## Data Loading"]})
-
-    load_lines = [f"data_path = {data_path}"]
-    for f in files:
-        clean = f.replace(".zip", "").replace(".csv.zip", ".csv")
-        if clean.endswith(".csv"):
-            var_name = Path(clean).stem.replace("-", "_").replace(" ", "_")
-            load_lines.append(f'{var_name} = pd.read_csv(data_path + "{clean}")')
-    load_lines.append("train.head()")
 
     nb["cells"].append(
         {
             "cell_type": "code",
             "metadata": {},
-            "source": load_lines,
+            "source": [_data_loading_source(files)],
             "execution_count": None,
             "outputs": [],
         }

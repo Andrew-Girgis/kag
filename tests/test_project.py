@@ -314,3 +314,89 @@ def test_create_project_skips_download_when_file_listing_is_empty(
     assert not (Path(project_path) / "data").exists()
     assert (Path(project_path) / "no-data-competition.ipynb").exists()
     assert (Path(project_path) / "notes.md").exists()
+
+
+def _code_cell_sources(notebook: dict) -> list[str]:
+    return ["".join(cell["source"]) for cell in notebook["cells"] if cell["cell_type"] == "code"]
+
+
+def _data_loading_source(files: list[str]) -> str:
+    notebook = project.make_starter_notebook("demo", "", files)
+    return _code_cell_sources(notebook)[1]
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        ["train.csv", "test.csv", "sample_submission.csv"],
+        ["test.csv", "sample_submission.csv"],
+        ["2024-train.csv", "class.csv", "pd.csv", "my file (v2).csv"],
+        ["train/labels.csv", "test/labels.csv", "train.csv.zip"],
+        ["a².csv", "x½y.csv", "٣data.csv", "ﬁle.csv", "日本.csv"],
+        ["images.zip", "metadata.json"],
+        [],
+    ],
+)
+def test_make_starter_notebook_code_cells_compile(files: list[str]) -> None:
+    notebook = project.make_starter_notebook("demo", "", files)
+
+    for source in _code_cell_sources(notebook):
+        compile(source, "<cell>", "exec")
+
+
+def test_make_starter_notebook_previews_train_when_present() -> None:
+    source = _data_loading_source(["test.csv", "train.csv"])
+
+    assert 'train = pd.read_csv(data_path + "train.csv")' in source
+    assert source.endswith("train.head()")
+
+
+def test_make_starter_notebook_previews_first_csv_without_train() -> None:
+    source = _data_loading_source(["test.csv", "sample_submission.csv"])
+
+    assert "train" not in source
+    assert source.endswith("test.head()")
+
+
+def test_make_starter_notebook_generates_unique_safe_variable_names() -> None:
+    source = _data_loading_source(
+        ["2024-test.csv", "class.csv", "pd.csv", "train/labels.csv", "test/labels.csv"]
+    )
+
+    assert 'df_2024_test = pd.read_csv(data_path + "2024-test.csv")' in source
+    assert 'df_class = pd.read_csv(data_path + "class.csv")' in source
+    assert 'df_pd = pd.read_csv(data_path + "pd.csv")' in source
+    assert 'labels = pd.read_csv(data_path + "train/labels.csv")' in source
+    assert 'labels_2 = pd.read_csv(data_path + "test/labels.csv")' in source
+
+
+def test_make_starter_notebook_normalizes_unicode_variable_names() -> None:
+    source = _data_loading_source(["a².csv", "x½y.csv", "٣data.csv", "ﬁle.csv", "file.csv"])
+
+    assert 'a2 = pd.read_csv(data_path + "a².csv")' in source
+    assert 'x1_2y = pd.read_csv(data_path + "x½y.csv")' in source
+    assert 'df_٣data = pd.read_csv(data_path + "٣data.csv")' in source
+    assert 'file = pd.read_csv(data_path + "ﬁle.csv")' in source
+    assert 'file_2 = pd.read_csv(data_path + "file.csv")' in source
+
+
+def test_make_starter_notebook_strips_zip_suffix_from_csv_archives() -> None:
+    source = _data_loading_source(["train.csv.zip"])
+
+    assert 'train = pd.read_csv(data_path + "train.csv")' in source
+
+
+def test_make_starter_notebook_lists_data_dir_without_csv_files() -> None:
+    source = _data_loading_source(["images.zip"])
+
+    assert "read_csv" not in source
+    assert "os.listdir(data_path)" in source
+
+
+def test_make_starter_notebook_caps_csv_loads() -> None:
+    files = [f"part_{index}.csv" for index in range(project.MAX_NOTEBOOK_CSV_LOADS + 5)]
+
+    source = _data_loading_source(files)
+
+    assert source.count("pd.read_csv") == project.MAX_NOTEBOOK_CSV_LOADS
+    assert "# 5 more CSV files in data/" in source
