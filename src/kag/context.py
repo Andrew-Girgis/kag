@@ -15,9 +15,12 @@ SCHEMA_PATH = Path("data") / "SCHEMA.md"
 MANIFEST_SCHEMA_VERSION = 1
 SAMPLE_ROWS = 1000
 EXAMPLE_VALUES = 3
-MAX_INSPECTED_FILES = 50
-MAX_COUNTED_BYTES = 512 * 1024 * 1024
+MAX_INSPECTED_CSVS = 50
+MAX_LISTED_FILES = 200
+MAX_EXACT_COUNT_BYTES = 128 * 1024 * 1024
+MAX_ESTIMATED_COUNT_BYTES = 512 * 1024 * 1024
 COUNT_CHUNK_SIZE = 1024 * 1024
+PRIORITY_STEMS = ("sample_submission", "gender_submission", "train", "test")
 
 
 @dataclass
@@ -33,6 +36,7 @@ class DataFileProfile:
     path: str
     size_bytes: int
     rows: int | None = None
+    rows_estimated: bool = False
     columns: list[ColumnProfile] = field(default_factory=list)
     inspected: bool = False
 
@@ -46,7 +50,9 @@ class DataProfile:
     target_columns: list[str] = field(default_factory=list)
     sample_submission: str | None = None
     submission_rows: int | None = None
-    truncated: bool = False
+    omitted_files: int = 0
+    omitted_bytes: int = 0
+    omitted_extensions: dict[str, int] = field(default_factory=dict)
 
 
 def _value_type(value: str) -> str:
@@ -83,8 +89,8 @@ def _column_type(values: list[str]) -> str:
     return "string"
 
 
-def _count_rows(path: Path) -> int | None:
-    if path.stat().st_size > MAX_COUNTED_BYTES:
+def _estimate_rows(path: Path) -> int | None:
+    if path.stat().st_size > MAX_ESTIMATED_COUNT_BYTES:
         return None
     newlines = 0
     last = b"\n"
@@ -101,6 +107,8 @@ def profile_csv(path: Path, data_dir: Path) -> DataFileProfile:
         path=path.relative_to(data_dir).as_posix(),
         size_bytes=path.stat().st_size,
     )
+    count_exactly = profile.size_bytes <= MAX_EXACT_COUNT_BYTES
+    records = 0
     try:
         with path.open(newline="", encoding="utf-8", errors="replace") as handle:
             reader = csv.reader(handle)
@@ -108,11 +116,13 @@ def profile_csv(path: Path, data_dir: Path) -> DataFileProfile:
             if not header:
                 return profile
             samples: list[list[str]] = [[] for _ in header]
-            for index, row in enumerate(reader):
-                if index >= SAMPLE_ROWS:
+            for row in reader:
+                if records < SAMPLE_ROWS:
+                    for position in range(len(header)):
+                        samples[position].append(row[position] if position < len(row) else "")
+                elif not count_exactly:
                     break
-                for position in range(len(header)):
-                    samples[position].append(row[position] if position < len(row) else "")
+                records += 1
     except (OSError, csv.Error):
         return profile
 
@@ -125,7 +135,11 @@ def profile_csv(path: Path, data_dir: Path) -> DataFileProfile:
         )
         for name, values in zip(header, samples)
     ]
-    profile.rows = _count_rows(path)
+    if count_exactly:
+        profile.rows = records
+    else:
+        profile.rows = _estimate_rows(path)
+        profile.rows_estimated = profile.rows is not None
     profile.inspected = True
     return profile
 
@@ -137,6 +151,12 @@ def _find(profiles: list[DataFileProfile], stem: str) -> DataFileProfile | None:
     return None
 
 
+def _csv_priority(path: Path) -> tuple[int, str]:
+    stem = path.stem.lower()
+    rank = PRIORITY_STEMS.index(stem) if stem in PRIORITY_STEMS else len(PRIORITY_STEMS)
+    return rank, path.as_posix()
+
+
 def profile_data(data_dir: Path, listed_files: list[str]) -> DataProfile:
     if not data_dir.is_dir():
         return DataProfile(downloaded=False, files=[], listed_files=listed_files)
@@ -146,27 +166,30 @@ def profile_data(data_dir: Path, listed_files: list[str]) -> DataProfile:
         for path in data_dir.rglob("*")
         if path.is_file() and path.name != SCHEMA_PATH.name and path.suffix.lower() != ".zip"
     )
-    profiles: list[DataFileProfile] = []
-    for index, path in enumerate(paths):
-        if path.suffix.lower() == ".csv" and index < MAX_INSPECTED_FILES:
-            profiles.append(profile_csv(path, data_dir))
-        else:
-            profiles.append(
-                DataFileProfile(
-                    path=path.relative_to(data_dir).as_posix(), size_bytes=path.stat().st_size
-                )
-            )
+    csv_paths = sorted((path for path in paths if path.suffix.lower() == ".csv"), key=_csv_priority)
+    inspected = set(csv_paths[:MAX_INSPECTED_CSVS])
 
-    data = DataProfile(
-        downloaded=bool(profiles),
-        files=profiles,
-        listed_files=listed_files,
-        truncated=len(paths) > MAX_INSPECTED_FILES,
-    )
+    profiles = [profile_csv(path, data_dir) for path in sorted(inspected)]
+    data = DataProfile(downloaded=bool(paths), files=profiles, listed_files=listed_files)
+    for path in paths:
+        if path in inspected:
+            continue
+        size = path.stat().st_size
+        if len(data.files) < MAX_LISTED_FILES:
+            data.files.append(
+                DataFileProfile(path=path.relative_to(data_dir).as_posix(), size_bytes=size)
+            )
+            continue
+        data.omitted_files += 1
+        data.omitted_bytes += size
+        extension = path.suffix.lower() or "(none)"
+        data.omitted_extensions[extension] = data.omitted_extensions.get(extension, 0) + 1
+    data.files.sort(key=lambda profile: profile.path)
+
     submission = _find(profiles, "sample_submission") or _find(profiles, "gender_submission")
     if submission and submission.columns:
         data.sample_submission = submission.path
-        data.submission_rows = submission.rows
+        data.submission_rows = None if submission.rows_estimated else submission.rows
         data.id_column = submission.columns[0].name
         data.target_columns = [column.name for column in submission.columns[1:]]
     else:
@@ -213,7 +236,12 @@ def render_schema_md(competition_title: str, data: DataProfile) -> str:
             lines.append(f"- **Submission template:** `data/{data.sample_submission}`")
 
     for profile in data.files:
-        rows = f"{profile.rows:,} rows" if profile.rows is not None else "rows not counted"
+        if profile.rows is None:
+            rows = "rows not counted"
+        elif profile.rows_estimated:
+            rows = f"~{profile.rows:,} rows (estimated from line count)"
+        else:
+            rows = f"{profile.rows:,} rows"
         lines.extend(["", f"## `{profile.path}`", ""])
         lines.append(f"{_format_size(profile.size_bytes)}, {rows}")
         if not profile.inspected:
@@ -226,8 +254,20 @@ def render_schema_md(competition_title: str, data: DataProfile) -> str:
             lines.append(
                 f"| `{column.name}` | {column.type} | {column.missing_in_sample} | {examples} |"
             )
-    if data.truncated:
-        lines.extend(["", f"_Only the first {MAX_INSPECTED_FILES} files were profiled._"])
+    if data.omitted_files:
+        extensions = ", ".join(
+            f"`{extension}` x{count:,}"
+            for extension, count in sorted(
+                data.omitted_extensions.items(), key=lambda item: (-item[1], item[0])
+            )
+        )
+        lines.extend(
+            [
+                "",
+                f"_...and {data.omitted_files:,} more files ({_format_size(data.omitted_bytes)}) "
+                f"not listed: {extensions}._",
+            ]
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -274,10 +314,16 @@ def build_manifest(
                     "path": f"data/{profile.path}",
                     "size_bytes": profile.size_bytes,
                     "rows": profile.rows,
+                    "rows_estimated": profile.rows_estimated,
                     "columns": [column.name for column in profile.columns],
                 }
                 for profile in data.files
             ],
+            "omitted_files": {
+                "count": data.omitted_files,
+                "size_bytes": data.omitted_bytes,
+                "extensions": data.omitted_extensions,
+            },
             "listed_files": data.listed_files,
         },
         "paths": {
@@ -287,6 +333,14 @@ def build_manifest(
             "agents": "AGENTS.md",
         },
     }
+
+
+def _submission_type(competition: dict) -> str:
+    if competition["submissions_disabled"]:
+        return "Disabled"
+    if competition["notebook_only_submissions"]:
+        return "Kaggle notebook only (code competition)"
+    return "CSV file upload"
 
 
 def render_agents_md(manifest: dict) -> str:
@@ -308,12 +362,7 @@ def render_agents_md(manifest: dict) -> str:
         ("Join deadline", competition["join_deadline"]),
         ("Daily submission limit", competition["max_daily_submissions"]),
         ("Max team size", competition["max_team_size"]),
-        (
-            "Submission type",
-            "Kaggle notebook only (code competition)"
-            if competition["notebook_only_submissions"]
-            else "CSV file upload",
-        ),
+        ("Submission type", _submission_type(competition)),
     ]
     lines.extend(["", "## Competition", ""])
     lines.extend(f"- **{label}:** {value}" for label, value in facts if value)
@@ -342,11 +391,6 @@ def render_agents_md(manifest: dict) -> str:
     else:
         lines.append("See the Evaluation section of `notes.md`.")
 
-    submit = (
-        "Submit by running a Kaggle notebook attached to the competition."
-        if competition["notebook_only_submissions"]
-        else f'Submit with `kaggle competitions submit -c {slug} -f <file> -m "<message>"`.'
-    )
     lines.extend(
         [
             "",
@@ -355,11 +399,26 @@ def render_agents_md(manifest: dict) -> str:
             "- Read the Rules section of `notes.md` before using external data or pretrained "
             "models.",
             "- Treat files in `data/` as read-only; write derived data and models elsewhere.",
-            "- Check a submission's columns and row count against the template before "
-            "submitting; daily submissions are limited.",
-            f"- {submit}",
         ]
     )
+    if competition["submissions_disabled"]:
+        lines.append(
+            "- Submissions are disabled for this competition; Kaggle will not accept new "
+            "submissions."
+        )
+    else:
+        submit = (
+            "Submit by running a Kaggle notebook attached to the competition."
+            if competition["notebook_only_submissions"]
+            else f'Submit with `kaggle competitions submit -c {slug} -f <file> -m "<message>"`.'
+        )
+        lines.extend(
+            [
+                "- Check a submission's columns and row count against the template before "
+                "submitting; daily submissions are limited.",
+                f"- {submit}",
+            ]
+        )
     return "\n".join(lines) + "\n"
 
 
