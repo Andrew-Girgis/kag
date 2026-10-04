@@ -18,6 +18,8 @@ MANIFEST_SCHEMA_VERSION = 1
 SAMPLE_ROWS = 1000
 CANCEL_CHECK_RECORDS = 10_000
 MAX_AGENTS_FIELD_LENGTH = 120
+MAX_NAME_LENGTH = 80
+SNIFF_BYTES = 64 * 1024
 MAX_INSPECTED_CSVS = 50
 MAX_LISTED_FILES = 200
 MAX_EXACT_COUNT_BYTES = 128 * 1024 * 1024
@@ -41,6 +43,7 @@ class DataFileProfile:
     rows_estimated: bool = False
     columns: list[ColumnProfile] = field(default_factory=list)
     inspected: bool = False
+    has_header: bool = True
 
 
 @dataclass
@@ -121,12 +124,20 @@ def profile_csv(
     records = 0
     try:
         with path.open(newline="", encoding="utf-8", errors="replace") as handle:
+            profile.has_header = _has_header(handle.read(SNIFF_BYTES))
+            handle.seek(0)
             reader = csv.reader(handle)
-            header = next(reader, None)
-            if not header:
+            first = next(reader, None)
+            if not first:
                 return profile
+            if profile.has_header:
+                header = [safe_name(name) for name in first]
+                pending: list[list[str]] = []
+            else:
+                header = [f"column_{index}" for index in range(1, len(first) + 1)]
+                pending = [first]
             samples: list[list[str]] = [[] for _ in header]
-            for row in reader:
+            for row in [*pending, *reader] if pending else reader:
                 if records % CANCEL_CHECK_RECORDS == 0 and _cancelled(cancel):
                     return profile
                 if records < SAMPLE_ROWS:
@@ -155,6 +166,20 @@ def profile_csv(
     return profile
 
 
+def _has_header(sample: str) -> bool:
+    try:
+        return csv.Sniffer().has_header(sample)
+    except csv.Error:
+        return False
+
+
+def safe_name(value: object, limit: int = MAX_NAME_LENGTH) -> str:
+    text = re.sub(r"\s+", " ", str(value)).replace("`", "'").replace("|", "/").strip()
+    if len(text) > limit:
+        text = text[: limit - 1].rstrip() + "…"
+    return text
+
+
 def _find(profiles: list[DataFileProfile], stem: str) -> DataFileProfile | None:
     for profile in profiles:
         if Path(profile.path).stem.lower() == stem:
@@ -174,11 +199,13 @@ def profile_data(
     if not data_dir.is_dir():
         return DataProfile(downloaded=False, files=[], listed_files=listed_files)
 
-    paths = sorted(
-        path
-        for path in data_dir.rglob("*")
-        if path.is_file() and path.name != SCHEMA_PATH.name and path.suffix.lower() != ".zip"
-    )
+    found: list[Path] = []
+    for index, path in enumerate(data_dir.rglob("*")):
+        if index % CANCEL_CHECK_RECORDS == 0 and _cancelled(cancel):
+            return DataProfile(downloaded=bool(found), files=[], listed_files=listed_files)
+        if path.is_file() and path.name != SCHEMA_PATH.name and path.suffix.lower() != ".zip":
+            found.append(path)
+    paths = sorted(found)
     csv_paths = sorted((path for path in paths if path.suffix.lower() == ".csv"), key=_csv_priority)
     inspected = set(csv_paths[:MAX_INSPECTED_CSVS])
 
@@ -188,7 +215,9 @@ def profile_data(
             break
         profiles.append(profile_csv(path, data_dir, cancel))
     data = DataProfile(downloaded=bool(paths), files=profiles, listed_files=listed_files)
-    for path in paths:
+    for index, path in enumerate(paths):
+        if index % CANCEL_CHECK_RECORDS == 0 and _cancelled(cancel):
+            break
         if path in inspected:
             continue
         size = path.stat().st_size
@@ -204,14 +233,21 @@ def profile_data(
     data.files.sort(key=lambda profile: profile.path)
 
     submission = _find(profiles, "sample_submission") or _find(profiles, "gender_submission")
-    if submission and submission.columns:
+    if submission and submission.columns and submission.has_header:
         data.sample_submission = submission.path
         data.submission_rows = None if submission.rows_estimated else submission.rows
         data.id_column = submission.columns[0].name
         data.target_columns = [column.name for column in submission.columns[1:]]
     else:
         train, test = _find(profiles, "train"), _find(profiles, "test")
-        if train and test and train.columns and test.columns:
+        if (
+            train
+            and test
+            and train.columns
+            and test.columns
+            and train.has_header
+            and test.has_header
+        ):
             test_names = {column.name for column in test.columns}
             data.target_columns = [
                 column.name for column in train.columns if column.name not in test_names
@@ -251,7 +287,9 @@ def render_schema_md(competition_title: str, data: DataProfile) -> str:
             targets = ", ".join(f"`{name}`" for name in data.target_columns)
             lines.append(f"- **Target column(s):** {targets}")
         if data.sample_submission:
-            lines.append(f"- **Submission template:** `data/{data.sample_submission}`")
+            lines.append(
+                f"- **Submission template:** `data/{safe_name(data.sample_submission, 120)}`"
+            )
 
     for profile in data.files:
         if profile.rows is None:
@@ -260,12 +298,14 @@ def render_schema_md(competition_title: str, data: DataProfile) -> str:
             rows = f"~{profile.rows:,} rows (estimated from line count)"
         else:
             rows = f"{profile.rows:,} rows"
-        lines.extend(["", f"## `{profile.path}`", ""])
+        lines.extend(["", f"## `{safe_name(profile.path, 120)}`", ""])
         lines.append(f"{_format_size(profile.size_bytes)}, {rows}")
         if not profile.inspected:
             lines.append("")
             lines.append("_Not inspected (only CSV files are profiled)._")
             continue
+        if not profile.has_header:
+            lines.extend(["", "_No header row detected; columns are numbered._"])
         lines.extend(["", "| Column | Type | Missing (sample) |", "|---|---|---|"])
         for column in profile.columns:
             lines.append(f"| `{column.name}` | {column.type} | {column.missing_in_sample} |")
@@ -392,7 +432,7 @@ def render_agents_md(manifest: dict) -> str:
             "",
             "## Project layout",
             "",
-            f"- `{manifest['paths']['notebook']}`: starter notebook",
+            f"- `{safe_name(manifest['paths']['notebook'], 120)}`: starter notebook",
             "- `notes.md`: overview, evaluation, data description, rules, and top notebooks",
             "- `data/`: competition data (gitignored); see `data/SCHEMA.md` for columns"
             if manifest["data"]["downloaded"]
@@ -404,10 +444,12 @@ def render_agents_md(manifest: dict) -> str:
     lines.extend(["", "## Submission format", ""])
     if submission["template"]:
         columns = ", ".join(
-            f"`{name}`" for name in [submission["id_column"], *submission["target_columns"]]
+            f"`{safe_name(name)}`"
+            for name in [submission["id_column"], *submission["target_columns"]]
         )
         rows = f", {submission['rows']:,} rows" if submission["rows"] is not None else ""
-        lines.append(f"Match `{submission['template']}`: columns {columns}{rows}.")
+        template = safe_name(submission["template"], 120)
+        lines.append(f"Match `{template}`: columns {columns}{rows}.")
     else:
         lines.append("See the Evaluation section of `notes.md`.")
 
