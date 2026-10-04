@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from types import SimpleNamespace
 
 import pytest
 import requests
+
+from kag import kaggle_sdk
 
 
 def _is_kaggle_command(cmd: Sequence[str] | str) -> bool:
@@ -31,6 +33,17 @@ def block_real_kaggle_cli(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(subprocess, "run", guarded_run)
     monkeypatch.setattr(subprocess, "Popen", guarded_popen)
+
+
+@pytest.fixture(autouse=True)
+def block_real_kaggle_sdk(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    def blocked_load_api() -> object:
+        raise kaggle_sdk.KaggleSdkError("tests must not call the real Kaggle API")
+
+    kaggle_sdk.reset()
+    monkeypatch.setattr(kaggle_sdk, "_load_api", blocked_load_api)
+    yield
+    kaggle_sdk.reset()
 
 
 @pytest.fixture(autouse=True)

@@ -9,6 +9,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import kaggle_sdk
+
 
 NEXT_PAGE_TOKEN_PREFIX = "Next Page Token = "
 NO_COMPETITIONS_MESSAGE = "No competitions found"
@@ -129,6 +131,32 @@ def list_competitions_page(
     search: str | None = None,
     page: int = 1,
     page_size: int = 20,
+) -> tuple[list[Competition], bool]:
+    try:
+        listed, has_more = kaggle_sdk.list_competitions(
+            group=group, page=page, page_size=page_size, search=search
+        )
+    except kaggle_sdk.KaggleSdkError:
+        return _list_competitions_page_cli(group, search, page, page_size)
+    competitions = [
+        Competition(
+            slug=item.slug,
+            title=item.title,
+            deadline=item.deadline,
+            reward=item.reward,
+            team_count=str(item.team_count),
+            is_joined=item.user_has_entered,
+        )
+        for item in listed
+    ]
+    return competitions, has_more
+
+
+def _list_competitions_page_cli(
+    group: str,
+    search: str | None,
+    page: int,
+    page_size: int,
 ) -> tuple[list[Competition], bool]:
     cmd = [
         "kaggle",
