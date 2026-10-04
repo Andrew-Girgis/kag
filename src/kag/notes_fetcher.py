@@ -2,14 +2,24 @@ from __future__ import annotations
 
 import re
 import threading
-from urllib.parse import urljoin
 
+from . import kaggle_sdk
+from .kaggle_sdk import CompetitionPage, NotebookSummary
 
 BASE_WEB_URL = "https://www.kaggle.com"
-BASE_API_URL = "https://www.kaggle.com/api/i"
+SECTION_HEADING_LEVEL = 4
+HTML_TAG_PATTERN = re.compile(
+    r"<(p|div|h[1-6]|ul|ol|li|br|b|strong|em|i|a|table|img|span|code|pre)\b", re.IGNORECASE
+)
+HEADING_PATTERN = re.compile(r"^(#{1,6})(\s+.*)$")
+FENCE_PATTERN = re.compile(r"^\s*(```|~~~)")
+FENCED_BLOCK_PATTERN = re.compile(r"^\s*(```|~~~).*?^\s*\1[^\n]*$", re.MULTILINE | re.DOTALL)
+SETEXT_UNDERLINE_PATTERN = re.compile(r"^\s{0,3}(=+|-+)\s*$")
 
 
 def _html_to_markdown(html: str, base_url: str) -> str:
+    from urllib.parse import urljoin
+
     from bs4 import BeautifulSoup
     from markdownify import markdownify
 
@@ -28,71 +38,110 @@ def _html_to_markdown(html: str, base_url: str) -> str:
     return markdown.strip()
 
 
-def _competition_session(slug: str):
-    import requests
-
-    session = requests.Session()
-    overview_url = f"{BASE_WEB_URL}/competitions/{slug}/overview"
-    session.get(overview_url, timeout=20)
-    xsrf_token = session.cookies.get("XSRF-TOKEN") or session.cookies.get("CSRF-TOKEN")
-    headers = {
-        "content-type": "application/json",
-        "x-requested-with": "XMLHttpRequest",
-        "origin": BASE_WEB_URL,
-        "referer": overview_url,
-    }
-    if xsrf_token:
-        headers["x-xsrf-token"] = xsrf_token
-    return session, headers
+def _is_html(content: str) -> bool:
+    return bool(HTML_TAG_PATTERN.search(FENCED_BLOCK_PATTERN.sub("", content)))
 
 
-def _post_api(session, headers: dict[str, str], endpoint: str, payload: dict):
-    response = session.post(
-        f"{BASE_API_URL}/{endpoint}",
-        json=payload,
-        headers=headers,
-        timeout=25,
-    )
-    if response.status_code != 200:
-        return None
-    return response.json()
+def _setext_to_atx(markdown: str) -> str:
+    lines = markdown.splitlines()
+    converted: list[str] = []
+    in_fence = False
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if FENCE_PATTERN.match(line):
+            in_fence = not in_fence
+            converted.append(line)
+            index += 1
+            continue
+        following = lines[index + 1] if index + 1 < len(lines) else ""
+        underline = SETEXT_UNDERLINE_PATTERN.match(following)
+        is_text = (
+            line.strip()
+            and not in_fence
+            and not HEADING_PATTERN.match(line)
+            and not line.lstrip().startswith(("-", "*", "+", ">", "|"))
+        )
+        if underline and is_text and not FENCE_PATTERN.match(following):
+            level = "#" if underline.group(1).startswith("=") else "##"
+            converted.append(f"{level} {line.strip()}")
+            index += 2
+            continue
+        converted.append(line)
+        index += 1
+    return "\n".join(converted)
 
 
-def _build_code_section(kernels: list[dict]) -> str:
-    if not kernels:
-        return "_No code entries returned by Kaggle API._"
+def _page_markdown(content: str, slug: str) -> str:
+    base_url = f"{BASE_WEB_URL}/competitions/{slug}/overview"
+    if _is_html(content):
+        return _html_to_markdown(content, base_url)
+    return re.sub(r"\n{3,}", "\n\n", content.replace("\r\n", "\n")).strip()
 
-    lines = [
-        "Top notebooks from competition code tab:",
-        "",
-    ]
-    for kernel in kernels[:20]:
-        title = kernel.get("title") or "Untitled"
-        author = (kernel.get("author") or {}).get("displayName") or "Unknown"
-        votes = kernel.get("totalVotes", 0)
-        views = kernel.get("totalViews", 0)
-        script_url = kernel.get("scriptUrl") or ""
-        full_url = urljoin(BASE_WEB_URL, script_url)
-        lines.append(f"- [{title}]({full_url}) - {author} (votes: {votes}, views: {views})")
+
+def _demote_headings(markdown: str, minimum_level: int = SECTION_HEADING_LEVEL) -> str:
+    lines = _setext_to_atx(markdown).splitlines()
+    in_fence = False
+    levels: list[int] = []
+    for line in lines:
+        if FENCE_PATTERN.match(line):
+            in_fence = not in_fence
+            continue
+        match = HEADING_PATTERN.match(line)
+        if match and not in_fence:
+            levels.append(len(match.group(1)))
+    if not levels:
+        return "\n".join(lines)
+    shift = max(0, minimum_level - min(levels))
+    if shift == 0:
+        return "\n".join(lines)
+
+    demoted: list[str] = []
+    in_fence = False
+    for line in lines:
+        if FENCE_PATTERN.match(line):
+            in_fence = not in_fence
+            demoted.append(line)
+            continue
+        match = HEADING_PATTERN.match(line)
+        if match and not in_fence:
+            level = min(6, len(match.group(1)) + shift)
+            demoted.append("#" * level + match.group(2))
+        else:
+            demoted.append(line)
+    return "\n".join(demoted)
+
+
+def _page_title(name: str) -> str:
+    if " " in name or name != name.lower():
+        return name.strip()
+    return name.replace("-", " ").replace("_", " ").strip().title()
+
+
+def _section_for(name: str) -> str:
+    lowered = name.lower()
+    if "rule" in lowered:
+        return "Rules"
+    if "evaluation" in lowered:
+        return "Evaluation"
+    if "data" in lowered:
+        return "Data"
+    return "Overview"
+
+
+def _overview_priority(page: CompetitionPage) -> int:
+    lowered = page.name.lower()
+    return 0 if ("description" in lowered or "abstract" in lowered) else 1
+
+
+def _build_code_section(notebooks: list[NotebookSummary]) -> str:
+    if not notebooks:
+        return "_No public notebooks yet._"
+    lines = ["Most-voted notebooks for this competition:", ""]
+    for notebook in notebooks:
+        url = f"{BASE_WEB_URL}/code/{notebook.ref}"
+        lines.append(f"- [{notebook.title}]({url}) - {notebook.author} (votes: {notebook.votes})")
     return "\n".join(lines)
-
-
-def _format_evaluation_algorithm(value) -> str:
-    if isinstance(value, dict):
-        name = value.get("name")
-        if name:
-            return str(name)
-        description = value.get("description")
-        if description:
-            return str(description)
-        return str(value)
-    if isinstance(value, list):
-        formatted = [_format_evaluation_algorithm(item) for item in value]
-        formatted = [item for item in formatted if item]
-        return ", ".join(formatted)
-    if value is None:
-        return ""
-    return str(value)
 
 
 def fetch_competition_markdown_sections(
@@ -108,130 +157,29 @@ def fetch_competition_markdown_sections(
     if cancelled():
         return sections, warnings
     try:
-        session, headers = _competition_session(slug)
-    except Exception as exc:
-        warnings.append(f"Failed to create Kaggle web session: {exc}")
-        return sections, warnings
+        pages = kaggle_sdk.list_competition_pages(slug)
+    except kaggle_sdk.KaggleSdkError as exc:
+        warnings.append(f"Could not fetch competition pages: {exc}")
+        pages = []
 
-    if cancelled():
-        return sections, warnings
-    competition = _post_api(
-        session,
-        headers,
-        "competitions.CompetitionService/GetCompetition",
-        {"competitionName": slug},
-    )
-    if not competition:
-        warnings.append("Could not fetch competition overview metadata")
-        return sections, warnings
-
-    competition_id = competition.get("id")
-    if not competition_id:
-        warnings.append("Competition ID missing from Kaggle API response")
-        return sections, warnings
-
-    if cancelled():
-        return sections, warnings
-    pages_response = _post_api(
-        session,
-        headers,
-        "competitions.PageService/ListPages",
-        {"competitionId": competition_id},
-    )
-
-    page_items = (pages_response or {}).get("pages", [])
-
-    overview_parts: list[str] = []
-    evaluation_parts: list[str] = []
-    data_parts: list[str] = []
-    rules_parts: list[str] = []
-
-    brief = competition.get("briefDescription") or ""
-    if brief:
-        overview_parts.append(brief.strip())
-
-    evaluation_algo = _format_evaluation_algorithm(competition.get("evaluationAlgorithm"))
-    if evaluation_algo:
-        evaluation_parts.extend(
-            [
-                "### Evaluation Algorithm",
-                "",
-                str(evaluation_algo).strip(),
-            ]
-        )
-
-    for page in page_items:
-        name = str(page.get("name") or "").strip()
-        title = str(page.get("postTitle") or name or "Page").strip().title()
-        content_html = page.get("content") or ""
-        if not content_html:
+    parts: dict[str, list[str]] = {}
+    ordered_pages = sorted(pages, key=_overview_priority)
+    for page in ordered_pages:
+        content = _page_markdown(page.content, slug)
+        if not content:
             continue
-        page_url = f"{BASE_WEB_URL}/competitions/{slug}/overview"
-        content_md = _html_to_markdown(content_html, page_url)
-        if not content_md:
-            continue
+        chunk = f"### {page.title or _page_title(page.name)}\n\n{_demote_headings(content)}"
+        parts.setdefault(_section_for(page.name), []).append(chunk)
+    for name, chunks in parts.items():
+        sections[name] = "\n\n".join(chunks).strip()
 
-        chunk = f"### {title}\n\n{content_md}"
-        lowered_name = name.lower()
-        if "rule" in lowered_name:
-            rules_parts.append(chunk)
-        elif "evaluation" in lowered_name:
-            evaluation_parts.append(chunk)
-        elif "data" in lowered_name:
-            data_parts.append(chunk)
-        else:
-            overview_parts.append(chunk)
-
-    kernels_payload = {
-        "kernelFilterCriteria": {
-            "search": "",
-            "listRequest": {
-                "competitionId": competition_id,
-                "sortBy": "HOTNESS",
-                "pageSize": 20,
-                "group": "EVERYONE",
-                "page": 1,
-                "modelIds": [],
-                "modelInstanceIds": [],
-                "excludeKernelIds": [],
-                "tagIds": "",
-                "excludeResultsFilesOutputs": False,
-                "wantOutputFiles": False,
-                "excludeNonAccessedDatasources": True,
-            },
-        },
-        "detailFilterCriteria": {
-            "deletedAccessBehavior": "RETURN_NOTHING",
-            "unauthorizedAccessBehavior": "RETURN_NOTHING",
-            "excludeResultsFilesOutputs": False,
-            "wantOutputFiles": False,
-            "kernelIds": [],
-            "outputFileTypes": [],
-            "includeInvalidDataSources": False,
-        },
-        "readMask": "pinnedKernels",
-    }
     if cancelled():
         return sections, warnings
-    kernels_response = _post_api(
-        session,
-        headers,
-        "kernels.KernelsService/ListKernels",
-        kernels_payload,
-    )
-    kernels = (kernels_response or {}).get("kernels", [])
-
-    if overview_parts:
-        sections["Overview"] = "\n\n".join(overview_parts).strip()
-    if evaluation_parts:
-        sections["Evaluation"] = "\n\n".join(evaluation_parts).strip()
-    if data_parts:
-        sections["Data"] = "\n\n".join(data_parts).strip()
-    if rules_parts:
-        sections["Rules"] = "\n\n".join(rules_parts).strip()
-    if kernels_response is None:
-        warnings.append("Could not fetch competition code listing")
+    try:
+        notebooks = kaggle_sdk.list_top_notebooks(slug)
+    except kaggle_sdk.KaggleSdkError as exc:
+        warnings.append(f"Could not fetch competition notebooks: {exc}")
     else:
-        sections["Code"] = _build_code_section(kernels)
+        sections["Code"] = _build_code_section(notebooks)
 
     return sections, warnings
