@@ -78,13 +78,14 @@ uv tool install kag
 ### 2. Install and authenticate Kaggle CLI
 
 - Python 3.11+
-- [Kaggle CLI](https://github.com/Kaggle/kaggle-api) installed and authenticated
-  - Preferred: `KAGGLE_API_TOKEN`
-  - Also supported: `KAGGLE_USERNAME` + `KAGGLE_KEY`
-  - Legacy fallback: `~/.kaggle/kaggle.json`
+- [Kaggle CLI](https://github.com/Kaggle/kaggle-cli) 2.x installed and authenticated. kag uses whatever login the Kaggle CLI uses:
+  - Recommended: `kaggle auth login` (browser sign-in, credentials cached in `~/.kaggle/credentials.json`)
+  - API token: `KAGGLE_API_TOKEN`, or the token saved to `~/.kaggle/access_token`
+  - Legacy: `KAGGLE_USERNAME` + `KAGGLE_KEY`, or `~/.kaggle/kaggle.json` containing `username` and `key`
 
 ```bash
-python -m pip install kaggle
+uv tool install kaggle
+kaggle auth login
 kaggle --version
 ```
 
