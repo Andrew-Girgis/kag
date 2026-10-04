@@ -255,9 +255,7 @@ def _safe_zip_target(member_name: str, destination: Path) -> Path | None:
     return target
 
 
-def _copy_with_cancel(
-    source: BinaryIO, output: BinaryIO, cancel: threading.Event | None
-) -> None:
+def _copy_with_cancel(source: BinaryIO, output: BinaryIO, cancel: threading.Event | None) -> None:
     while True:
         if cancel is not None and cancel.is_set():
             raise ProjectCreationCancelled("Project setup cancelled")
@@ -385,8 +383,11 @@ def create_project(
     project_dir.mkdir(parents=True, exist_ok=True)
 
     try:
+        check_cancel()
         report("Fetching competition notes...")
-        sections, extract_warnings = fetch_competition_markdown_sections(competition.slug)
+        sections, extract_warnings = fetch_competition_markdown_sections(
+            competition.slug, cancel=cancel
+        )
         check_cancel()
         access_note = None
         download_permitted = download_files

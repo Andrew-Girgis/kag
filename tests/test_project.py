@@ -113,7 +113,9 @@ def test_create_project_records_unsafe_zip_entries_in_notes(
     )
     monkeypatch.setattr(project, "download_competition", fake_download_competition)
     monkeypatch.setattr(project, "get_competition_files", lambda slug: ["train.csv"])
-    monkeypatch.setattr(project, "fetch_competition_markdown_sections", lambda slug: ({}, []))
+    monkeypatch.setattr(
+        project, "fetch_competition_markdown_sections", lambda slug, **kwargs: ({}, [])
+    )
 
     project_path = project.create_project(
         competition,
@@ -153,7 +155,9 @@ def test_create_project_raises_and_removes_new_project_after_download_failure(
         "download_competition",
         lambda slug, data_dir, **kwargs: DownloadResult(False, "403 Client Error: Forbidden", ()),
     )
-    monkeypatch.setattr(project, "fetch_competition_markdown_sections", lambda slug: ({}, []))
+    monkeypatch.setattr(
+        project, "fetch_competition_markdown_sections", lambda slug, **kwargs: ({}, [])
+    )
 
     with pytest.raises(project.ProjectCreationError, match="403 Client Error: Forbidden"):
         project.create_project(
@@ -193,7 +197,9 @@ def test_create_project_preserves_existing_project_after_download_failure(
         "download_competition",
         lambda slug, data_dir, **kwargs: DownloadResult(False, "403 Client Error: Forbidden", ()),
     )
-    monkeypatch.setattr(project, "fetch_competition_markdown_sections", lambda slug: ({}, []))
+    monkeypatch.setattr(
+        project, "fetch_competition_markdown_sections", lambda slug, **kwargs: ({}, [])
+    )
 
     with pytest.raises(project.ProjectCreationError):
         project.create_project(
@@ -232,7 +238,9 @@ def test_create_project_does_not_open_editor_after_download_failure(
         "download_competition",
         lambda slug, data_dir, **kwargs: DownloadResult(False, "403 Client Error: Forbidden", ()),
     )
-    monkeypatch.setattr(project, "fetch_competition_markdown_sections", lambda slug: ({}, []))
+    monkeypatch.setattr(
+        project, "fetch_competition_markdown_sections", lambda slug, **kwargs: ({}, [])
+    )
     monkeypatch.setattr(project.shutil, "which", lambda cmd: "/usr/bin/code")
     monkeypatch.setattr(
         project.subprocess, "Popen", lambda *args, **kwargs: popen_calls.append(args)
@@ -267,7 +275,9 @@ def test_create_project_without_download_still_creates_project(
 
     monkeypatch.setattr(project, "download_competition", fail_if_called)
     monkeypatch.setattr(project, "get_competition_files", lambda slug: ["train.csv"])
-    monkeypatch.setattr(project, "fetch_competition_markdown_sections", lambda slug: ({}, []))
+    monkeypatch.setattr(
+        project, "fetch_competition_markdown_sections", lambda slug, **kwargs: ({}, [])
+    )
 
     project_path = project.create_project(
         competition,
@@ -303,7 +313,9 @@ def test_create_project_skips_download_when_file_listing_is_empty(
     )
     monkeypatch.setattr(project, "list_competition_files", lambda slug: FileListResult(True, ()))
     monkeypatch.setattr(project, "download_competition", fail_if_called)
-    monkeypatch.setattr(project, "fetch_competition_markdown_sections", lambda slug: ({}, []))
+    monkeypatch.setattr(
+        project, "fetch_competition_markdown_sections", lambda slug, **kwargs: ({}, [])
+    )
 
     project_path = project.create_project(
         competition,
@@ -428,7 +440,9 @@ def test_create_project_launches_editor_with_expected_command(
     popen_calls: list[tuple[list[str], dict[str, object]]] = []
 
     monkeypatch.setattr(project, "get_competition_files", lambda slug: [])
-    monkeypatch.setattr(project, "fetch_competition_markdown_sections", lambda slug: ({}, []))
+    monkeypatch.setattr(
+        project, "fetch_competition_markdown_sections", lambda slug, **kwargs: ({}, [])
+    )
     monkeypatch.setattr(project.shutil, "which", lambda cmd: f"/usr/bin/{cmd}")
     monkeypatch.setattr(
         project.subprocess,
@@ -468,7 +482,9 @@ def test_create_project_gitignores_editor_logs(
         team_count="0",
     )
     monkeypatch.setattr(project, "get_competition_files", lambda slug: [])
-    monkeypatch.setattr(project, "fetch_competition_markdown_sections", lambda slug: ({}, []))
+    monkeypatch.setattr(
+        project, "fetch_competition_markdown_sections", lambda slug, **kwargs: ({}, [])
+    )
 
     project_path = project.create_project(
         competition,
@@ -489,7 +505,9 @@ def _stub_project_sources(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(project, "get_competition_files", lambda slug: ["train.csv"])
-    monkeypatch.setattr(project, "fetch_competition_markdown_sections", lambda slug: ({}, []))
+    monkeypatch.setattr(
+        project, "fetch_competition_markdown_sections", lambda slug, **kwargs: ({}, [])
+    )
     monkeypatch.setattr(project.subprocess, "run", record_run)
     return commands
 
@@ -843,3 +861,52 @@ def test_extract_zip_safely_stops_when_cancelled(tmp_path: Path) -> None:
         _extract_zip_safely(zip_path, destination, cancel=cancel)
 
     assert not (destination / "b.csv").exists()
+
+
+def test_create_project_cancelled_before_start_skips_notes_fetch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_project_sources(monkeypatch)
+    cancel = threading.Event()
+    cancel.set()
+
+    def fail_if_called(*args: object, **kwargs: object) -> tuple[dict, list]:
+        raise AssertionError("notes fetch should not start after cancel")
+
+    monkeypatch.setattr(project, "fetch_competition_markdown_sections", fail_if_called)
+
+    with pytest.raises(project.ProjectCreationCancelled):
+        project.create_project(
+            _existing_competition(),
+            Config(kag_path=tmp_path, auto_git=False, auto_venv=False),
+            download_files=False,
+            cancel=cancel,
+        )
+
+
+def test_create_project_passes_cancel_to_notes_fetch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_project_sources(monkeypatch)
+    cancel = threading.Event()
+    received: list[object] = []
+
+    def cancel_during_fetch(slug: str, cancel: threading.Event | None = None) -> tuple:
+        received.append(cancel)
+        cancel.set()  # type: ignore[union-attr]
+        return {}, []
+
+    monkeypatch.setattr(project, "fetch_competition_markdown_sections", cancel_during_fetch)
+
+    with pytest.raises(project.ProjectCreationCancelled):
+        project.create_project(
+            _existing_competition(),
+            Config(kag_path=tmp_path, auto_git=False, auto_venv=False),
+            download_files=False,
+            cancel=cancel,
+        )
+
+    assert received == [cancel]
+    assert not (tmp_path / "titanic").exists()
