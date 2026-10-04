@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -91,7 +92,7 @@ def test_create_project_records_unsafe_zip_entries_in_notes(
         team_count="0",
     )
 
-    def fake_download_competition(slug: str, data_dir: str) -> bool:
+    def fake_download_competition(slug: str, data_dir: str, **kwargs: object) -> bool:
         zip_path = Path(data_dir) / f"{slug}.zip"
         _write_zip(
             zip_path,
@@ -150,7 +151,7 @@ def test_create_project_raises_and_removes_new_project_after_download_failure(
     monkeypatch.setattr(
         project,
         "download_competition",
-        lambda slug, data_dir: DownloadResult(False, "403 Client Error: Forbidden", ()),
+        lambda slug, data_dir, **kwargs: DownloadResult(False, "403 Client Error: Forbidden", ()),
     )
     monkeypatch.setattr(project, "fetch_competition_markdown_sections", lambda slug: ({}, []))
 
@@ -190,7 +191,7 @@ def test_create_project_preserves_existing_project_after_download_failure(
     monkeypatch.setattr(
         project,
         "download_competition",
-        lambda slug, data_dir: DownloadResult(False, "403 Client Error: Forbidden", ()),
+        lambda slug, data_dir, **kwargs: DownloadResult(False, "403 Client Error: Forbidden", ()),
     )
     monkeypatch.setattr(project, "fetch_competition_markdown_sections", lambda slug: ({}, []))
 
@@ -229,7 +230,7 @@ def test_create_project_does_not_open_editor_after_download_failure(
     monkeypatch.setattr(
         project,
         "download_competition",
-        lambda slug, data_dir: DownloadResult(False, "403 Client Error: Forbidden", ()),
+        lambda slug, data_dir, **kwargs: DownloadResult(False, "403 Client Error: Forbidden", ()),
     )
     monkeypatch.setattr(project, "fetch_competition_markdown_sections", lambda slug: ({}, []))
     monkeypatch.setattr(project.shutil, "which", lambda cmd: "/usr/bin/code")
@@ -260,7 +261,7 @@ def test_create_project_without_download_still_creates_project(
     )
     download_calls: list[str] = []
 
-    def fail_if_called(slug: str, data_dir: str) -> DownloadResult:
+    def fail_if_called(slug: str, data_dir: str, **kwargs: object) -> DownloadResult:
         download_calls.append(slug)
         return DownloadResult(False, "should not download", ())
 
@@ -293,7 +294,7 @@ def test_create_project_skips_download_when_file_listing_is_empty(
     )
     download_calls: list[str] = []
 
-    def fail_if_called(slug: str, data_dir: str) -> DownloadResult:
+    def fail_if_called(slug: str, data_dir: str, **kwargs: object) -> DownloadResult:
         download_calls.append(slug)
         return DownloadResult(False, "should not download", ())
 
@@ -631,6 +632,135 @@ def test_create_project_removes_new_project_after_unexpected_error(
             _existing_competition(),
             Config(kag_path=tmp_path, auto_git=False, auto_venv=False),
             download_files=False,
+        )
+
+    assert not (tmp_path / "titanic").exists()
+
+
+def _stub_download_sources(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_project_sources(monkeypatch)
+    monkeypatch.setattr(
+        project, "check_competition_access", lambda slug: (True, "Access confirmed")
+    )
+    monkeypatch.setattr(
+        project,
+        "list_competition_files",
+        lambda slug: FileListResult(True, (CompetitionFile("train.csv", 123),)),
+    )
+
+
+def test_create_project_reports_progress_for_each_step(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_download_sources(monkeypatch)
+
+    def fake_download(
+        slug: str, data_dir: str, progress=None, cancel=None, **kwargs: object
+    ) -> DownloadResult:
+        _write_zip(Path(data_dir) / "titanic.zip", {"train.csv": "a,b\n1,2\n"})
+        progress(2048)
+        return DownloadResult(True, "Download completed", ("titanic.zip",))
+
+    monkeypatch.setattr(project, "download_competition", fake_download)
+    messages: list[str] = []
+
+    project.create_project(
+        _existing_competition(),
+        Config(kag_path=tmp_path, auto_git=True, auto_venv=True),
+        download_files=True,
+        progress=messages.append,
+    )
+
+    assert messages == [
+        "Fetching competition notes...",
+        "Checking access and data files...",
+        "Downloading data...",
+        "Downloading data... 2.0 KB",
+        "Extracting titanic.zip...",
+        "Writing notebook and notes...",
+        "Setting up git...",
+        "Creating virtual environment...",
+    ]
+
+
+def test_create_project_cancel_during_download_removes_new_project(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_download_sources(monkeypatch)
+    cancel = threading.Event()
+
+    def cancelled_download(
+        slug: str, data_dir: str, progress=None, cancel=None, **kwargs: object
+    ) -> DownloadResult:
+        (Path(data_dir) / "titanic.zip").write_bytes(b"partial")
+        cancel.set()
+        return DownloadResult(False, "Download cancelled", cancelled=True)
+
+    monkeypatch.setattr(project, "download_competition", cancelled_download)
+
+    with pytest.raises(project.ProjectCreationCancelled):
+        project.create_project(
+            _existing_competition(),
+            Config(kag_path=tmp_path, auto_git=False, auto_venv=False),
+            download_files=True,
+            cancel=cancel,
+        )
+
+    assert not (tmp_path / "titanic").exists()
+
+
+def test_create_project_cancel_in_existing_project_removes_only_new_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_download_sources(monkeypatch)
+    project_dir = tmp_path / "titanic"
+    (project_dir / "data").mkdir(parents=True)
+    (project_dir / "data" / "mine.csv").write_text("MY DATA")
+    (project_dir / "titanic.ipynb").write_text("MY NOTEBOOK")
+
+    def cancelled_download(
+        slug: str, data_dir: str, progress=None, cancel=None, **kwargs: object
+    ) -> DownloadResult:
+        (Path(data_dir) / "titanic.zip").write_bytes(b"partial")
+        return DownloadResult(False, "Download cancelled", cancelled=True)
+
+    monkeypatch.setattr(project, "download_competition", cancelled_download)
+
+    with pytest.raises(project.ProjectCreationCancelled):
+        project.create_project(
+            _existing_competition(),
+            Config(kag_path=tmp_path, auto_git=False, auto_venv=False),
+            download_files=True,
+            cancel=threading.Event(),
+        )
+
+    assert (project_dir / "data" / "mine.csv").read_text() == "MY DATA"
+    assert not (project_dir / "data" / "titanic.zip").exists()
+    assert (project_dir / "titanic.ipynb").read_text() == "MY NOTEBOOK"
+
+
+def test_create_project_stops_before_download_when_cancelled_early(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_download_sources(monkeypatch)
+    cancel = threading.Event()
+    cancel.set()
+
+    def fail_if_called(*args: object, **kwargs: object) -> DownloadResult:
+        raise AssertionError("download should not start after cancel")
+
+    monkeypatch.setattr(project, "download_competition", fail_if_called)
+
+    with pytest.raises(project.ProjectCreationCancelled):
+        project.create_project(
+            _existing_competition(),
+            Config(kag_path=tmp_path, auto_git=False, auto_venv=False),
+            download_files=True,
+            cancel=cancel,
         )
 
     assert not (tmp_path / "titanic").exists()

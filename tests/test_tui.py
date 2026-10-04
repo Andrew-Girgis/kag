@@ -4,18 +4,17 @@ import pytest
 
 from kag.config import Config
 from kag.kaggle_api import Competition
-from kag.project import ProjectCreationError
 from kag.screens.access_required import AccessRequiredScreen
 from kag.screens.confirm_download import ConfirmDownloadScreen
+from kag.screens.creating_project import CreatingProjectScreen
 from kag.screens.competition_list import CompetitionListScreen
 from kag.screens.editor_select import EditorSelectScreen
 from kag import screens
-from kag import tui
 from kag.tui import KagApp
 from kag.update_check import UpdateNotice
 
 
-def test_editor_selected_download_failure_does_not_set_result(
+def test_project_creation_failure_does_not_set_result(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -30,27 +29,64 @@ def test_editor_selected_download_failure_does_not_set_result(
     notifications: list[str] = []
     pushed_screens: list[object] = []
 
-    def failed_create_project(*args: object, **kwargs: object) -> str:
-        raise ProjectCreationError("403 Client Error: Forbidden")
-
-    monkeypatch.setattr(tui, "create_project", failed_create_project)
     monkeypatch.setattr(app, "notify", lambda message, **kwargs: notifications.append(message))
     monkeypatch.setattr(
         app, "push_screen", lambda screen, callback=None: pushed_screens.append(screen)
     )
     monkeypatch.setattr(app, "exit", lambda *args, **kwargs: None)
 
-    app._on_editor_selected(
-        EditorSelectScreen.Selected(
-            competition=competition,
-            download_files=True,
-            editor=None,
-        )
+    app._on_project_created(
+        CreatingProjectScreen.Finished(competition, error="403 Client Error: Forbidden")
     )
 
     assert app.result is None
     assert notifications == ["403 Client Error: Forbidden"]
-    assert pushed_screens, "Expected the TUI to return to the download choice after failure."
+    assert isinstance(pushed_screens[0], ConfirmDownloadScreen)
+
+
+def test_editor_selected_pushes_project_creation_screen(tmp_path) -> None:
+    competition = Competition(
+        slug="has-access",
+        title="Has Access",
+        deadline="",
+        reward="",
+        team_count="0",
+    )
+    app = KagApp(Config(kag_path=tmp_path))
+    pushed_screens: list[object] = []
+    app.push_screen = lambda screen, callback=None: pushed_screens.append(screen)  # type: ignore[method-assign]
+
+    app._on_editor_selected(
+        EditorSelectScreen.Selected(competition=competition, download_files=True, editor="code")
+    )
+
+    screen = pushed_screens[0]
+    assert isinstance(screen, CreatingProjectScreen)
+    assert screen.download_files is True
+    assert screen.editor == "code"
+
+
+def test_project_creation_cancel_returns_quietly(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    competition = Competition(
+        slug="cancelled",
+        title="Cancelled",
+        deadline="",
+        reward="",
+        team_count="0",
+    )
+    app = KagApp(Config(kag_path=tmp_path))
+    notifications: list[str] = []
+    pushed_screens: list[object] = []
+    monkeypatch.setattr(app, "notify", lambda message, **kwargs: notifications.append(message))
+    monkeypatch.setattr(
+        app, "push_screen", lambda screen, callback=None: pushed_screens.append(screen)
+    )
+
+    app._on_project_created(CreatingProjectScreen.Finished(competition, cancelled=True))
+
+    assert app.result is None
+    assert notifications == ["Project setup cancelled."]
+    assert pushed_screens == []
 
 
 def test_download_confirmation_denied_access_pushes_access_required_screen(
@@ -322,37 +358,3 @@ def test_missing_update_notice_does_not_notify(tmp_path, monkeypatch: pytest.Mon
     app._show_update_notice(None)
 
     assert notifications == []
-
-
-def test_editor_selected_unexpected_error_notifies_instead_of_crashing(
-    tmp_path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    competition = Competition(
-        slug="disk-full",
-        title="Disk Full",
-        deadline="",
-        reward="",
-        team_count="0",
-    )
-    app = KagApp(Config(kag_path=tmp_path))
-    notifications: list[str] = []
-    pushed_screens: list[object] = []
-
-    def broken_create_project(**kwargs: object) -> str:
-        raise OSError("No space left on device")
-
-    monkeypatch.setattr(tui, "create_project", broken_create_project)
-    monkeypatch.setattr(app, "notify", lambda message, **kwargs: notifications.append(message))
-    monkeypatch.setattr(
-        app, "push_screen", lambda screen, callback=None: pushed_screens.append(screen)
-    )
-    monkeypatch.setattr(app, "exit", lambda *args, **kwargs: None)
-
-    app._on_editor_selected(
-        EditorSelectScreen.Selected(competition=competition, download_files=True, editor=None)
-    )
-
-    assert app.result is None
-    assert notifications == ["Project creation failed: No space left on device"]
-    assert isinstance(pushed_screens[0], ConfirmDownloadScreen)

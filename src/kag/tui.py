@@ -11,7 +11,8 @@ from .screens.competition_list import CompetitionListScreen
 from .screens.editor_select import EditorSelectScreen
 from .screens.existing_project import ExistingProjectScreen
 from .screens.confirm_download import ConfirmDownloadScreen
-from .project import ProjectCreationError, create_project, existing_project_dir
+from .screens.creating_project import CreatingProjectScreen
+from .project import existing_project_dir
 from .update_check import UpdateNotice, check_for_update
 
 
@@ -52,8 +53,17 @@ class KagApp(App):
     #confirm-dialog {
         padding: 1 2;
     }
-    #existing-dialog {
+    #existing-dialog, #creating-dialog {
         padding: 1 2;
+    }
+    #creating-title {
+        text-style: bold;
+    }
+    #creating-spinner {
+        height: 3;
+    }
+    #creating-elapsed, #creating-hint {
+        color: $text-muted;
     }
     #existing-title {
         text-style: bold;
@@ -189,26 +199,30 @@ class KagApp(App):
     def _on_editor_selected(self, result: EditorSelectScreen.Selected | None) -> None:
         if result is None:
             return
-        try:
-            project_dir = create_project(
-                competition=result.competition,
-                config=self.config,
+        self.push_screen(
+            CreatingProjectScreen(
+                self.config,
+                result.competition,
                 download_files=result.download_files,
                 editor=result.editor,
-            )
-        except Exception as exc:
-            message = (
-                str(exc)
-                if isinstance(exc, ProjectCreationError)
-                else f"Project creation failed: {exc or type(exc).__name__}"
-            )
+            ),
+            self._on_project_created,
+        )
+
+    def _on_project_created(self, result: CreatingProjectScreen.Finished | None) -> None:
+        if result is None:
+            return
+        if result.cancelled:
+            self.notify("Project setup cancelled.", timeout=5)
+            return
+        if result.error is not None or result.project_path is None:
             self.result = None
-            self.notify(message, severity="error", timeout=10)
+            self.notify(result.error or "Project creation failed", severity="error", timeout=10)
             self.push_screen(
                 ConfirmDownloadScreen(result.competition),
                 self._on_download_confirmed,
             )
             return
 
-        self.result = project_dir
+        self.result = result.project_path
         self.exit()

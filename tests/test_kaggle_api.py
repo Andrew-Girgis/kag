@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import subprocess
+import threading
 from collections.abc import Callable
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -157,19 +159,61 @@ def test_list_competitions_page_treats_no_competitions_message_as_empty(
     assert has_more is False
 
 
-def test_download_competition_returns_failure_details_for_403(
-    tmp_path,
-    monkeypatch: pytest.MonkeyPatch,
-    completed_process: type[SimpleNamespace],
-) -> None:
-    def forbidden_cli(*args: object, **kwargs: object) -> object:
-        return completed_process(
-            returncode=1,
-            stdout="",
-            stderr="403 Client Error: Forbidden for url: https://example.test\nmore details",
-        )
+class FakeDownloadProcess:
+    def __init__(self, cmd: list[str], returncode: int, waits_before_exit: int) -> None:
+        self.cmd = cmd
+        self.returncode = returncode
+        self.waits_before_exit = waits_before_exit
+        self.terminated = False
 
-    monkeypatch.setattr(kaggle_api.subprocess, "run", forbidden_cli)
+    def wait(self, timeout: float | None = None) -> int:
+        if self.waits_before_exit > 0:
+            self.waits_before_exit -= 1
+            raise subprocess.TimeoutExpired(cmd=self.cmd, timeout=timeout or 0)
+        return self.returncode
+
+    def terminate(self) -> None:
+        self.terminated = True
+        self.waits_before_exit = 0
+        self.returncode = -15
+
+    def kill(self) -> None:
+        self.terminate()
+
+
+class FakeDownloadCli:
+    def __init__(
+        self,
+        returncode: int = 0,
+        stderr: bytes = b"",
+        files: dict[str, bytes] | None = None,
+        waits_before_exit: int = 0,
+    ) -> None:
+        self.returncode = returncode
+        self.stderr = stderr
+        self.files = files or {}
+        self.waits_before_exit = waits_before_exit
+        self.processes: list[FakeDownloadProcess] = []
+
+    def __call__(self, cmd: list[str], stdout: object, stderr: object, **kwargs: object) -> object:
+        target = Path(cmd[cmd.index("-p") + 1])
+        for name, content in self.files.items():
+            (target / name).write_bytes(content)
+        stderr.write(self.stderr)  # type: ignore[attr-defined]
+        process = FakeDownloadProcess(cmd, self.returncode, self.waits_before_exit)
+        self.processes.append(process)
+        return process
+
+
+def test_download_competition_returns_failure_details_for_403(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_cli = FakeDownloadCli(
+        returncode=1,
+        stderr=b"403 Client Error: Forbidden for url: https://example.test\nmore details",
+    )
+    monkeypatch.setattr(kaggle_api.subprocess, "Popen", fake_cli)
 
     result = kaggle_api.download_competition("playground-series-s6e5", str(tmp_path))
 
@@ -178,14 +222,10 @@ def test_download_competition_returns_failure_details_for_403(
 
 
 def test_download_competition_fails_when_no_files_are_created(
-    tmp_path,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    completed_process: type[SimpleNamespace],
 ) -> None:
-    def successful_empty_cli(*args: object, **kwargs: object) -> object:
-        return completed_process(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(kaggle_api.subprocess, "run", successful_empty_cli)
+    monkeypatch.setattr(kaggle_api.subprocess, "Popen", FakeDownloadCli())
 
     result = kaggle_api.download_competition("empty-download", str(tmp_path))
 
@@ -194,15 +234,12 @@ def test_download_competition_fails_when_no_files_are_created(
 
 
 def test_download_competition_succeeds_when_files_are_created(
-    tmp_path,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    completed_process: type[SimpleNamespace],
 ) -> None:
-    def successful_cli(*args: object, **kwargs: object) -> object:
-        (tmp_path / "competition.zip").write_text("zip-ish")
-        return completed_process(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(kaggle_api.subprocess, "run", successful_cli)
+    monkeypatch.setattr(
+        kaggle_api.subprocess, "Popen", FakeDownloadCli(files={"competition.zip": b"zip-ish"})
+    )
 
     result = kaggle_api.download_competition("successful-download", str(tmp_path))
 
@@ -210,19 +247,59 @@ def test_download_competition_succeeds_when_files_are_created(
     assert result.files == ("competition.zip",)
 
 
-def test_download_competition_reports_timeout(
-    tmp_path,
+def test_download_competition_reports_progress_without_timing_out(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def timeout(cmd: list[str], *args: object, **kwargs: object) -> object:
-        raise subprocess.TimeoutExpired(cmd=cmd, timeout=120)
+    fake_cli = FakeDownloadCli(files={"competition.zip": b"x" * 2048}, waits_before_exit=3)
+    monkeypatch.setattr(kaggle_api.subprocess, "Popen", fake_cli)
+    sizes: list[int] = []
 
-    monkeypatch.setattr(kaggle_api.subprocess, "run", timeout)
+    result = kaggle_api.download_competition("slow-download", str(tmp_path), progress=sizes.append)
 
-    result = kaggle_api.download_competition("slow-download", str(tmp_path))
+    assert result.success is True
+    assert sizes == [2048, 2048, 2048]
+    assert "-q" in fake_cli.processes[0].cmd
+
+
+def test_download_competition_stops_process_when_cancelled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_cli = FakeDownloadCli(files={"partial.zip": b"x"}, waits_before_exit=100)
+    monkeypatch.setattr(kaggle_api.subprocess, "Popen", fake_cli)
+    cancel = threading.Event()
+
+    def cancel_on_progress(size: int) -> None:
+        cancel.set()
+
+    result = kaggle_api.download_competition(
+        "cancelled-download", str(tmp_path), progress=cancel_on_progress, cancel=cancel
+    )
 
     assert result.success is False
-    assert "timed out" in result.details.lower()
+    assert result.cancelled is True
+    assert fake_cli.processes[0].terminated is True
+
+
+def test_download_competition_does_not_start_when_already_cancelled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_cli = FakeDownloadCli()
+    monkeypatch.setattr(kaggle_api.subprocess, "Popen", fake_cli)
+    cancel = threading.Event()
+    cancel.set()
+
+    result = kaggle_api.download_competition("never-started", str(tmp_path), cancel=cancel)
+
+    assert result.cancelled is True
+    assert fake_cli.processes == []
+
+
+def test_conftest_blocks_real_kaggle_popen(tmp_path: Path) -> None:
+    with pytest.raises(AssertionError, match="real kaggle CLI"):
+        kaggle_api.download_competition("blocked", str(tmp_path))
 
 
 def test_list_competition_files_distinguishes_successful_empty_listing(

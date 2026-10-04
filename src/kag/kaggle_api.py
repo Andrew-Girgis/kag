@@ -1,8 +1,11 @@
 import csv
 import io
 import subprocess
+import tempfile
+import threading
 import time
 import webbrowser
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,6 +13,8 @@ from pathlib import Path
 NEXT_PAGE_TOKEN_PREFIX = "Next Page Token = "
 NO_COMPETITIONS_MESSAGE = "No competitions found"
 FILE_LIST_PAGE_SIZE = 200
+DOWNLOAD_POLL_SECONDS = 0.5
+DOWNLOAD_CANCELLED = "Download cancelled"
 MAX_FILE_LIST_PAGES = 50
 
 
@@ -65,6 +70,7 @@ class DownloadResult:
     success: bool
     details: str
     files: tuple[str, ...] = ()
+    cancelled: bool = False
 
 
 @dataclass(frozen=True)
@@ -258,20 +264,64 @@ def get_competition_files(slug: str) -> list[str]:
     return []
 
 
-def download_competition(slug: str, path: str) -> DownloadResult:
-    cmd = ["kaggle", "competitions", "download", "-q", slug, "-p", path]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-    except subprocess.TimeoutExpired:
-        return DownloadResult(False, "Kaggle download timed out")
-    except FileNotFoundError:
-        return DownloadResult(False, "kaggle CLI not found")
+def _directory_size(path: Path) -> int:
+    total = 0
+    for entry in path.rglob("*"):
+        try:
+            if entry.is_file():
+                total += entry.stat().st_size
+        except OSError:
+            continue
+    return total
 
-    if result.returncode != 0:
-        details = _first_detail_line(result.stdout, result.stderr)
+
+def _stop_process(process: subprocess.Popen) -> None:
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
+def download_competition(
+    slug: str,
+    path: str,
+    progress: Callable[[int], None] | None = None,
+    cancel: threading.Event | None = None,
+) -> DownloadResult:
+    cmd = ["kaggle", "competitions", "download", "-q", slug, "-p", path]
+    target = Path(path)
+    if cancel is not None and cancel.is_set():
+        return DownloadResult(False, DOWNLOAD_CANCELLED, cancelled=True)
+
+    with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+        try:
+            process = subprocess.Popen(cmd, stdout=stdout_file, stderr=stderr_file)
+        except FileNotFoundError:
+            return DownloadResult(False, "kaggle CLI not found")
+
+        while True:
+            try:
+                returncode = process.wait(timeout=DOWNLOAD_POLL_SECONDS)
+                break
+            except subprocess.TimeoutExpired:
+                if cancel is not None and cancel.is_set():
+                    _stop_process(process)
+                    return DownloadResult(False, DOWNLOAD_CANCELLED, cancelled=True)
+                if progress is not None:
+                    progress(_directory_size(target))
+
+        stdout_file.seek(0)
+        stderr_file.seek(0)
+        stdout = stdout_file.read().decode(errors="replace")
+        stderr = stderr_file.read().decode(errors="replace")
+
+    if returncode != 0:
+        details = _first_detail_line(stdout, stderr)
         return DownloadResult(False, details or "Kaggle download failed")
 
-    downloaded_files = tuple(sorted(p.name for p in Path(path).iterdir() if p.is_file()))
+    downloaded_files = tuple(sorted(p.name for p in target.iterdir() if p.is_file()))
     if not downloaded_files:
         return DownloadResult(False, "Kaggle download completed but no files were found")
 
