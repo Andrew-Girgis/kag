@@ -400,8 +400,11 @@ def _write_agent_context(
     details: CompetitionDetails | None,
     listed_files: list[str],
     notebook_name: str,
+    cancel: threading.Event | None = None,
 ) -> None:
-    data_profile = context.profile_data(project_dir / "data", listed_files)
+    data_profile = context.profile_data(project_dir / "data", listed_files, cancel)
+    if cancel is not None and cancel.is_set():
+        raise ProjectCreationCancelled("Project setup cancelled")
     manifest = context.build_manifest(competition, details, data_profile, notebook_name)
     title = details.title if details else competition.title
     _write_if_missing(project_dir / context.MANIFEST_PATH, context.manifest_json(manifest))
@@ -515,7 +518,7 @@ def create_project(
 
         check_cancel()
         report("Writing agent context files...")
-        _write_agent_context(project_dir, competition, details, files, notebook_path.name)
+        _write_agent_context(project_dir, competition, details, files, notebook_path.name, cancel)
 
         check_cancel()
         if config.auto_git and not project_had_content:
