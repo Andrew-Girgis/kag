@@ -35,6 +35,7 @@ STARTER_NOTEBOOK = {
 
 
 MAX_NOTEBOOK_CSV_LOADS = 10
+EDITOR_LOG_DIR = Path(".kag") / "logs"
 RESERVED_NOTEBOOK_NAMES = {"pd", "np", "plt", "sns", "data_path", "train_test_split"}
 
 
@@ -276,6 +277,10 @@ def _editor_command(editor: str, project_dir: Path, notebook_path: Path) -> list
     return [editor, str(project_dir)]
 
 
+def _editor_log_path(project_dir: Path, editor: str) -> Path:
+    return project_dir / EDITOR_LOG_DIR / f"{Path(editor).name}.log"
+
+
 def _download_failure_message(slug: str, details: str) -> str:
     message = f"Download failed for {slug}: {details}"
     if "403" in details or "forbidden" in details.lower():
@@ -356,7 +361,10 @@ def create_project(
                     ["git", "init"], cwd=str(project_dir), capture_output=True, timeout=10
                 )
                 gitignore = project_dir / ".gitignore"
-                gitignore.write_text(".venv/\n__pycache__/\n*.pyc\n.ipynb_checkpoints/\ndata/\n")
+                gitignore.write_text(
+                    ".venv/\n__pycache__/\n*.pyc\n.ipynb_checkpoints/\ndata/\n"
+                    f"{EDITOR_LOG_DIR.as_posix()}/\n"
+                )
                 subprocess.run(
                     ["git", "add", "-A"], cwd=str(project_dir), capture_output=True, timeout=10
                 )
@@ -381,14 +389,17 @@ def create_project(
                 pass
 
         if editor and shutil.which(editor):
-            subprocess.Popen(
-                _editor_command(editor, project_dir, notebook_path),
-                cwd=str(project_dir),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
+            log_path = _editor_log_path(project_dir, editor)
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("ab") as log_file:
+                subprocess.Popen(
+                    _editor_command(editor, project_dir, notebook_path),
+                    cwd=str(project_dir),
+                    stdin=subprocess.DEVNULL,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
 
         return str(project_dir)
     except ProjectCreationError:

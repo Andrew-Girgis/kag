@@ -448,4 +448,32 @@ def test_create_project_launches_editor_with_expected_command(
     _, kwargs = popen_calls[0]
     assert kwargs["cwd"] == project_path
     assert kwargs["start_new_session"] is True
-    assert kwargs["stdout"] is project.subprocess.DEVNULL
+    assert kwargs["stdin"] is project.subprocess.DEVNULL
+    assert kwargs["stderr"] is project.subprocess.STDOUT
+    assert Path(kwargs["stdout"].name) == Path(project_path) / ".kag" / "logs" / f"{editor}.log"
+    assert (Path(project_path) / ".kag" / "logs" / f"{editor}.log").exists()
+
+
+def test_create_project_gitignores_editor_logs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    competition = Competition(
+        slug="gitignore-test",
+        title="Gitignore Test",
+        deadline="",
+        reward="",
+        team_count="0",
+    )
+    monkeypatch.setattr(project, "get_competition_files", lambda slug: [])
+    monkeypatch.setattr(project, "fetch_competition_markdown_sections", lambda slug: ({}, []))
+
+    project_path = project.create_project(
+        competition,
+        Config(kag_path=tmp_path, auto_git=True, auto_venv=False),
+        download_files=False,
+    )
+
+    assert project_path is not None
+    gitignore_lines = (Path(project_path) / ".gitignore").read_text().splitlines()
+    assert ".kag/logs/" in gitignore_lines
