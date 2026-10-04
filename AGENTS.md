@@ -27,10 +27,23 @@
 - Kaggle API calls are wrapped in `@work` async workers to avoid blocking TUI
 - Config loaded from `~/.kag_config.toml` with env var overrides
 
+## GitHub Workflow
+- Use issue-first development for public repo work.
+- When adding a TODO/backlog feature, create or identify a matching GitHub issue.
+- Before starting implementation, make sure there is a GitHub issue for the work; if there is not, create one first.
+- Create a feature/fix branch for each issue before coding.
+- Do not implement fixes directly on `main`; switch to a dedicated issue branch first, such as `fix/<issue>-short-description`.
+- Include the issue number in branch names where practical, such as `fix/12-offline-kaggle-error` or `feature/15-loading-animation`.
+- Link pull requests to their GitHub issue.
+- Prefer small, focused PRs that map to one issue.
+- Run tests and lint locally before opening a PR when feasible.
+- Merge through pull requests after automated checks pass.
+- Do not publish releases from feature branches.
+
 ## Commands
 - `uv run python -m kag.cli` - Run the app locally
-- `uv run ruff check src/` - Lint
-- `uv run ruff format src/` - Format
+- `uv run ruff check src/ tests/` - Lint
+- `uv run ruff format src/ tests/` - Format
 - `uv run pytest` - Run tests
 
 ## External Dependencies

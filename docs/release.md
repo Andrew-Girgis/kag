@@ -1,113 +1,145 @@
-# Release Plan
+# Release Process
 
-This document describes the planned PyPI release workflow for maintainers. It is a CD plan, not an active publishing workflow yet.
+This document describes how maintainers release `kag` to TestPyPI and PyPI.
 
 ## Goals
 
-- Publish `kag` from GitHub only after CI is stable.
-- Keep release publishing separate from normal pull request checks.
-- Prevent feature branches and arbitrary pushes from publishing packages.
-- Prefer PyPI trusted publishing over long-lived API tokens.
-- Make every release reproducible from a Git tag.
+- Publish `kag` from GitHub after release checks pass.
+- Keep release publishing separate from normal pull request CI.
+- Prevent feature branches and ordinary pushes from publishing packages.
+- Use PyPI trusted publishing instead of long-lived API tokens.
+- Validate on TestPyPI before publishing the real PyPI release.
 
-## Current State
+## Current Release Workflow
 
-- Pull request and `main` checks run in GitHub Actions.
-- The package metadata lives in `pyproject.toml`.
-- The package is built with Hatchling through `uv build`.
-- Publishing is still manual until the CD workflow is added.
+Release automation lives in `.github/workflows/release.yml`.
 
-## Planned Trigger
+The workflow has three jobs:
 
-Publishing should only run for intentional release events:
+- `build`: validates and builds the package.
+- `publish-testpypi`: publishes to TestPyPI from a manual workflow dispatch on `main`.
+- `publish-pypi`: publishes to PyPI from a pushed version tag like `v0.1.1`.
 
-- Preferred: pushing a version tag like `v0.1.1`.
-- Optional later: a manual `workflow_dispatch` release workflow that requires a version input.
-
-The release workflow should not run for feature branches or normal pull requests.
+Normal pull requests, feature branch pushes, and ordinary `main` pushes do not publish packages. The `build` job fails if the commit being released is not on `main`, so a tag pushed from an unmerged branch cannot publish.
 
 ## Required Release Checks
 
-Before publishing, the release workflow should run:
+Before publishing, the workflow runs:
 
 ```bash
 uv sync --locked
 uv run ruff check src/ tests/
 uv run pytest
 uv build
+uvx twine check --strict dist/*
 ```
 
-If any check fails, publishing should stop.
+It also verifies:
 
-## Planned GitHub Actions Shape
+- the release commit is on `main`.
+- `pyproject.toml` version matches `src/kag/__init__.py`.
+- tag releases use a tag that matches the package version, such as `v0.1.1` for version `0.1.1`.
 
-The future workflow should be separate from CI, for example `.github/workflows/release.yml`:
+If any check fails, publishing stops.
 
-```yaml
-name: Release
+## Trusted Publishing Setup
 
-on:
-  push:
-    tags:
-      - "v*"
+Before using the release workflow, configure trusted publishing in TestPyPI and PyPI.
 
-jobs:
-  publish:
-    runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      contents: read
-      id-token: write
+### GitHub Environments
 
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-      - run: uv python install 3.11
-      - run: uv sync --locked
-      - run: uv run ruff check src/ tests/
-      - run: uv run pytest
-      - run: uv build
-      - uses: pypa/gh-action-pypi-publish@release/v1
-```
+The repository has these GitHub environments (Settings -> Environments):
 
-## PyPI Trusted Publishing Setup
+- `testpypi`: deployments allowed only from the `main` branch. No approval required.
+- `pypi`: deployments allowed only from `v*` tags. Requires maintainer approval before publishing.
 
-Before enabling the release workflow, configure PyPI trusted publishing for this repository:
+Together with the `build` job's `main` check, a release needs a commit on `main`, a matching version tag, and an explicit approval.
 
+### TestPyPI Publisher
+
+Configure a trusted publisher for the TestPyPI `kag` project:
+
+- Publisher: GitHub
 - Repository owner: `Andrew-Girgis`
 - Repository name: `kag`
 - Workflow name: `release.yml`
-- Environment name: optional, such as `pypi`
+- Environment name: `testpypi`
 
-If trusted publishing is not available, use a GitHub environment secret for a PyPI API token as a fallback. Do not publish from a developer machine using local credentials as the normal release process.
+### PyPI Publisher
 
-## Manual Release Checklist
+Configure a trusted publisher for the PyPI `kag` project:
 
-Until CD is implemented, use this checklist for releases:
+- Publisher: GitHub
+- Repository owner: `Andrew-Girgis`
+- Repository name: `kag`
+- Workflow name: `release.yml`
+- Environment name: `pypi`
 
-1. Confirm `main` is green in CI.
-2. Update `version` in `pyproject.toml`.
-3. Update release notes.
-4. Run local checks:
+The environment names must match the workflow jobs. A mismatch causes PyPI trusted publishing to reject the upload.
+
+## TestPyPI Release Rehearsal
+
+Use TestPyPI to validate packaging before the real release.
+
+1. Create and merge a release-prep PR with a unique test version, such as `0.1.1rc1` or `0.1.1.dev1`.
+2. Open GitHub Actions.
+3. Select the `Release` workflow.
+4. Run the workflow manually from the `main` branch with `target=testpypi`.
+5. Wait for the `build` and `publish-testpypi` jobs to pass.
+6. Smoke test the exact wheel uploaded to TestPyPI in an isolated environment:
 
    ```bash
-   uv sync --locked
-   uv run ruff check src/ tests/
-   uv run pytest
-   uv build
+   VERSION=0.1.1rc1
+   WHEEL_URL=$(curl -fsSL "https://test.pypi.org/pypi/kag/$VERSION/json" \
+     | python3 -c 'import json,sys; print(next(f["url"] for f in json.load(sys.stdin)["urls"] if f["packagetype"] == "bdist_wheel"))')
+
+   uvx --isolated --from "kag @ $WHEEL_URL" kag --version
+   uvx --isolated --from "kag @ $WHEEL_URL" kag --help
+   uvx --isolated --from "kag @ $WHEEL_URL" kag --doctor
    ```
 
-5. Commit the version bump.
-6. Tag the release, for example `v0.1.1`.
-7. Publish to PyPI.
-8. Create a GitHub release from the tag.
+   This installs `kag` from TestPyPI and all dependencies from real PyPI, without touching an installed `kag`. Avoid `--index-url`/`--extra-index-url` mixes: `kag` also exists on PyPI, so uv may resolve the old production release instead of the rehearsal build, and TestPyPI copies of dependencies are not trustworthy.
 
-## Future CD Acceptance Criteria
+PyPI and TestPyPI versions are immutable. If a TestPyPI rehearsal needs to be repeated, use a new unique prerelease/dev version.
 
-- Release publishing runs only on intentional release tags or approved manual dispatches.
-- The workflow runs lint, tests, and build before publishing.
-- PyPI publishing uses trusted publishing or protected repository secrets.
-- Failed checks prevent publishing.
-- Normal pull requests and feature branch pushes cannot publish packages.
+## PyPI Release
+
+1. Create and merge a final release-prep PR with the final version in both:
+
+   - `pyproject.toml`
+   - `src/kag/__init__.py`
+
+2. Confirm `main` is green in CI.
+3. Create and push a matching tag:
+
+   ```bash
+   git tag v0.1.1
+   git push origin v0.1.1
+   ```
+
+4. The `Release` workflow runs automatically.
+5. The workflow validates, builds, and publishes to PyPI through the `pypi` environment.
+6. Approve the `pypi` deployment in GitHub when prompted.
+7. Create a GitHub Release from the tag with release notes.
+8. Verify the published package:
+
+   ```bash
+   uvx --isolated kag@0.1.1 --version
+   uvx --isolated kag@0.1.1 --help
+   ```
+
+## Manual Fallback
+
+GitHub trusted publishing is the normal release path. Only use local publishing as a fallback if the GitHub workflow is unavailable.
+
+If local publishing is required, still run checks first:
+
+```bash
+uv sync --locked
+uv run ruff check src/ tests/
+uv run pytest
+uv build
+uvx twine check --strict dist/*
+```
+
+Do not store PyPI credentials in the repository.
