@@ -9,7 +9,7 @@ from typing import Any, TypeVar
 
 T = TypeVar("T")
 
-_API_LOCK = threading.Lock()
+_API_LOCK = threading.RLock()
 _api: Any | None = None
 
 
@@ -75,12 +75,13 @@ def _get_api() -> Any:
 
 
 def _call(operation: Callable[[Any], T]) -> T:
-    api = _get_api()
-    try:
-        with _quiet():
-            return operation(api)
-    except (Exception, SystemExit) as exc:
-        raise KaggleSdkError(str(exc) or type(exc).__name__) from None
+    with _API_LOCK:
+        api = _get_api()
+        try:
+            with _quiet():
+                return operation(api)
+        except (Exception, SystemExit) as exc:
+            raise KaggleSdkError(str(exc) or type(exc).__name__) from None
 
 
 def reset() -> None:

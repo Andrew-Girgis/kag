@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import contextlib
+import sys
+import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -181,3 +184,35 @@ def test_notes_include_competition_details(
     assert "**Max team size:** 5" in notes
     assert "**Teams:** 10648" in notes
     assert "Join deadline" not in notes
+
+
+def test_concurrent_calls_do_not_overlap_or_leak_stream_redirection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active = 0
+    max_active = 0
+    counter_lock = threading.Lock()
+
+    class SlowApi:
+        def competitions_list(self, **kwargs: object) -> SimpleNamespace:
+            nonlocal active, max_active
+            with counter_lock:
+                active += 1
+                max_active = max(max_active, active)
+            print("library noise")
+            time.sleep(0.05)
+            with counter_lock:
+                active -= 1
+            return SimpleNamespace(competitions=[], next_page_token="")
+
+    _use_api(monkeypatch, SlowApi())
+    original_stdout, original_stderr = sys.stdout, sys.stderr
+    threads = [threading.Thread(target=kaggle_sdk.list_competitions) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert max_active == 1
+    assert sys.stdout is original_stdout
+    assert sys.stderr is original_stderr
