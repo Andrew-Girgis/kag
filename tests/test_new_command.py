@@ -42,6 +42,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
         return str(project_dir)
 
     monkeypatch.setattr(new_command, "check_competition_access", access)
+    monkeypatch.setattr(cli, "check_kaggle_cli", lambda: None)
     monkeypatch.setattr(new_command, "create_project", fake_create_project)
     state["config"] = config
     state["root"] = tmp_path
@@ -185,18 +186,50 @@ def test_known_editor_is_passed_through(
     assert env["calls"][0]["editor"] == "jupyter-lab"
 
 
-def test_competition_url_is_accepted(env: dict, capsys: pytest.CaptureFixture[str]) -> None:
-    code, result = _run(capsys, "https://www.kaggle.com/competitions/titanic/")
+@pytest.mark.parametrize(
+    "value",
+    [
+        "titanic",
+        "https://www.kaggle.com/competitions/titanic/",
+        "https://www.kaggle.com/competitions/titanic/overview",
+        "https://www.kaggle.com/competitions/titanic/rules?tab=x#top",
+        "www.kaggle.com/c/titanic/data",
+    ],
+)
+def test_competition_urls_resolve_to_slug(
+    env: dict, capsys: pytest.CaptureFixture[str], value: str
+) -> None:
+    code, result = _run(capsys, value)
 
     assert code == 0
     assert result["slug"] == "titanic"
 
 
-def test_invalid_competition_is_rejected(env: dict, capsys: pytest.CaptureFixture[str]) -> None:
-    code, result = _run(capsys, "..")
+@pytest.mark.parametrize(
+    "value", ["..", "../outside", "..\\outside", "C:\\outside", "a b", ""]
+)
+def test_invalid_competition_is_rejected(
+    env: dict, capsys: pytest.CaptureFixture[str], value: str
+) -> None:
+    code, result = _run(capsys, value)
 
     assert code == new_command.EXIT_ERROR
     assert result["status"] == "error"
+    assert env["calls"] == []
+
+
+def test_missing_kaggle_cli_is_reported_before_any_work(
+    env: dict, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        cli, "check_kaggle_cli", lambda: "kaggle CLI not found. Install with: pip install kaggle"
+    )
+
+    code, result = _run(capsys, "titanic", "--no-download")
+
+    assert code == new_command.EXIT_ERROR
+    assert result["message"] == "kaggle CLI not found. Install with: pip install kaggle"
+    assert env["calls"] == []
 
 
 def test_cancelled_creation_reports_cancelled(

@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import threading
 from pathlib import Path
+from urllib.parse import urlparse
 
 from . import context
 from .config import Config
-from .kaggle_api import Competition, _extract_slug, check_competition_access
+from .kaggle_api import Competition, check_competition_access
 from .kaggle_sdk import CompetitionDetails
 from .project import (
     ProjectCreationCancelled,
@@ -26,6 +28,7 @@ EXIT_CANCELLED = 130
 
 NEW_USAGE = "kag new <competition> [--no-download] [--no-git] [--no-venv] [--editor NAME] [--force] [--json]"
 SKIPPED_DIRECTORIES = {".git", ".venv", "data"}
+SLUG_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -46,6 +49,18 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--json", action="store_true", help="Print the result as JSON.")
     return parser
+
+
+def _competition_slug(value: str) -> str:
+    text = value.strip()
+    if "://" not in text and not text.startswith("www.kaggle.com"):
+        return text
+    parsed = urlparse(text if "://" in text else f"https://{text}")
+    parts = [part for part in parsed.path.split("/") if part]
+    for marker in ("competitions", "c"):
+        if marker in parts and parts.index(marker) + 1 < len(parts):
+            return parts[parts.index(marker) + 1]
+    return parts[-1] if parts else ""
 
 
 def _needs_join(details: str) -> bool:
@@ -115,7 +130,7 @@ def _emit(result: dict, as_json: bool) -> None:
 
 def run_new(argv: list[str]) -> int:
     args = _parser().parse_args(argv)
-    slug = _extract_slug(args.competition.strip())
+    slug = _competition_slug(args.competition)
     as_json = args.json
     config = Config.load()
     if args.no_git:
@@ -129,11 +144,17 @@ def run_new(argv: list[str]) -> int:
         _emit({**base, **result}, as_json)
         return code
 
-    if not slug or slug in {".", ".."} or "/" in slug:
+    if not SLUG_PATTERN.fullmatch(slug):
         return finish(
             {"status": "error", "message": f"Invalid competition: {args.competition}"},
             EXIT_ERROR,
         )
+
+    from .cli import check_kaggle_cli
+
+    cli_error = check_kaggle_cli()
+    if cli_error:
+        return finish({"status": "error", "message": cli_error}, EXIT_ERROR)
 
     editor, editor_error = _resolve_editor(config, args.editor)
     if editor_error:
