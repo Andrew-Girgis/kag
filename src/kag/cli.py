@@ -5,7 +5,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from . import __version__
+from . import __version__, kaggle_sdk
 from .config import Config
 
 
@@ -188,6 +188,13 @@ def doctor_command(json_output: bool = False) -> int:
         add_check("kaggle CLI", True, f"{kaggle_bin} ({version})")
     else:
         add_check("kaggle CLI", False, "not found")
+
+    library_version = kaggle_sdk.sdk_version()
+    add_check(
+        "kaggle python library",
+        library_version is not None,
+        f"kaggle {library_version}" if library_version else "not installed (reinstall kag)",
+    )
 
     auth_ok, auth_details = _kaggle_auth_status()
     add_check("kaggle credentials", auth_ok, auth_details)

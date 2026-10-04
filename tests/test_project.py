@@ -691,6 +691,7 @@ def test_create_project_reports_progress_for_each_step(
     )
 
     assert messages == [
+        "Fetching competition details...",
         "Fetching competition notes...",
         "Checking access and data files...",
         "Downloading data...",

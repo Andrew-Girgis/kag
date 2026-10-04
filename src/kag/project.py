@@ -19,6 +19,8 @@ from .kaggle_api import (
     get_competition_files,
     list_competition_files,
 )
+from . import kaggle_sdk
+from .kaggle_sdk import CompetitionDetails
 from .notes_fetcher import fetch_competition_markdown_sections
 
 
@@ -161,21 +163,45 @@ def _overview_snippet(sections: dict[str, str]) -> str:
     return ""
 
 
+def _details_lines(details: CompetitionDetails) -> list[str]:
+    facts = [
+        ("Category", details.category),
+        ("Evaluation metric", details.evaluation_metric),
+        ("Join deadline", details.new_entrant_deadline),
+        ("Team merger deadline", details.merger_deadline),
+        ("Max daily submissions", details.max_daily_submissions),
+        ("Max team size", details.max_team_size),
+        ("Submission type", "Notebook only" if details.is_kernels_submissions_only else ""),
+        ("Submissions", "Disabled" if details.submissions_disabled else ""),
+        ("Tags", ", ".join(details.tags)),
+    ]
+    return [f"**{label}:** {value}" for label, value in facts if value]
+
+
 def make_notes_md(
     competition: Competition,
     files: list[str],
     sections: dict[str, str],
     warnings: list[str],
     access_note: str | None = None,
+    details: CompetitionDetails | None = None,
 ) -> str:
     lines = [
-        f"# {competition.title}",
+        f"# {details.title if details else competition.title}",
         "",
-        f"**Slug:** {competition.slug}",
-        f"**Deadline:** {competition.deadline}",
-        f"**Reward:** {competition.reward}",
-        f"**Teams:** {competition.team_count}",
     ]
+    if details and details.description:
+        lines.extend([details.description, ""])
+    lines.extend(
+        [
+            f"**Slug:** {competition.slug}",
+            f"**Deadline:** {details.deadline if details else competition.deadline}",
+            f"**Reward:** {details.reward if details else competition.reward}",
+            f"**Teams:** {details.team_count if details else competition.team_count}",
+        ]
+    )
+    if details:
+        lines.extend(_details_lines(details))
 
     if access_note:
         lines.extend(
@@ -353,6 +379,13 @@ def _remove_new_paths(directory: Path, existing: set[Path]) -> None:
             continue
 
 
+def fetch_competition_details(slug: str) -> CompetitionDetails | None:
+    try:
+        return kaggle_sdk.get_competition_details(slug)
+    except kaggle_sdk.KaggleSdkError:
+        return None
+
+
 def _write_if_missing(path: Path, content: str) -> bool:
     if path.exists():
         return False
@@ -383,6 +416,9 @@ def create_project(
     project_dir.mkdir(parents=True, exist_ok=True)
 
     try:
+        check_cancel()
+        report("Fetching competition details...")
+        details = fetch_competition_details(competition.slug)
         check_cancel()
         report("Fetching competition notes...")
         sections, extract_warnings = fetch_competition_markdown_sections(
@@ -453,6 +489,7 @@ def create_project(
             sections=sections,
             warnings=extract_warnings,
             access_note=access_note,
+            details=details,
         )
         _write_if_missing(project_dir / "notes.md", notes)
 
