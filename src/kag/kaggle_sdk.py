@@ -176,3 +176,42 @@ def get_competition_details(slug: str) -> CompetitionDetails:
         url=_text(item.url),
         tags=tags,
     )
+
+
+@dataclass(frozen=True)
+class CompetitionPage:
+    name: str
+    content: str
+
+
+@dataclass(frozen=True)
+class NotebookSummary:
+    title: str
+    author: str
+    ref: str
+    votes: int
+
+
+def list_competition_pages(slug: str) -> list[CompetitionPage]:
+    pages = _call(lambda api: api.competition_list_pages(slug))
+    return [
+        CompetitionPage(name=_text(page.name), content=page.content or "")
+        for page in (pages or [])
+        if _text(page.name)
+    ]
+
+
+def list_top_notebooks(slug: str, limit: int = 20) -> list[NotebookSummary]:
+    kernels = _call(
+        lambda api: api.kernels_list(competition=slug, sort_by="voteCount", page_size=limit)
+    )
+    return [
+        NotebookSummary(
+            title=_text(kernel.title) or "Untitled",
+            author=_text(kernel.author) or "Unknown",
+            ref=_text(kernel.ref),
+            votes=_optional_int(kernel.total_votes) or 0,
+        )
+        for kernel in (kernels or [])
+        if _text(kernel.ref)
+    ]
