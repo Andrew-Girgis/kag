@@ -180,6 +180,8 @@ It checks:
 - writable directories
 - detected editors
 
+If you pick Jupyter Lab (or another editor) when creating a project, its output is written to `.kag/logs/<editor>.log` inside the project. On a headless or SSH session, find the Jupyter server URL and token there, or run `jupyter server list`.
+
 ## Current limitations
 
 - Competition join/terms acceptance is browser-assisted (not a direct Kaggle CLI command).
