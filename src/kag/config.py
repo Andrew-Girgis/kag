@@ -13,7 +13,7 @@ KNOWN_EDITORS = {
     "cursor": {"cmd": "cursor", "name": "Cursor"},
     "zed": {"cmd": "zed", "name": "Zed"},
     "windsurf": {"cmd": "windsurf", "name": "Windsurf"},
-    "jupyter": {"cmd": "jupyter", "name": "Jupyter Lab"},
+    "jupyter": {"cmd": "jupyter-lab", "name": "Jupyter Lab"},
 }
 
 
