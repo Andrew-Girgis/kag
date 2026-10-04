@@ -419,7 +419,7 @@ def test_make_starter_notebook_caps_csv_loads() -> None:
 @pytest.mark.parametrize(
     ("editor", "expected"),
     [
-        ("jupyter", ["jupyter", "lab", "{project}/launch-test.ipynb"]),
+        ("jupyter-lab", ["jupyter-lab", "{project}/launch-test.ipynb"]),
         ("code", ["code", "{project}"]),
         ("zed", ["zed", "{project}"]),
     ],

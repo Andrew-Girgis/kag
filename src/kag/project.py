@@ -305,8 +305,8 @@ def _extract_zip_safely(
 
 
 def _editor_command(editor: str, project_dir: Path, notebook_path: Path) -> list[str]:
-    if editor == "jupyter":
-        return ["jupyter", "lab", str(notebook_path)]
+    if editor == "jupyter-lab":
+        return ["jupyter-lab", str(notebook_path)]
     return [editor, str(project_dir)]
 
 
