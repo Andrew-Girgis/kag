@@ -9,6 +9,8 @@ from pathlib import Path
 
 NEXT_PAGE_TOKEN_PREFIX = "Next Page Token = "
 NO_COMPETITIONS_MESSAGE = "No competitions found"
+FILE_LIST_PAGE_SIZE = 200
+MAX_FILE_LIST_PAGES = 50
 
 
 class KaggleFetchError(RuntimeError):
@@ -187,28 +189,57 @@ def list_entered_competitions() -> list[Competition]:
     return list_competitions(group="entered")
 
 
-def list_competition_files(slug: str) -> FileListResult:
-    cmd = ["kaggle", "competitions", "files", "-v", slug]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        if result.returncode != 0:
-            details = _first_detail_line(result.stdout, result.stderr)
-            return FileListResult(False, details=details or "Competition files could not be listed")
-    except subprocess.TimeoutExpired:
-        return FileListResult(False, details="Kaggle files request timed out")
-    except FileNotFoundError:
-        return FileListResult(False, details="kaggle CLI not found")
+def _next_page_token(text: str) -> str | None:
+    for line in text.splitlines():
+        if line.startswith(NEXT_PAGE_TOKEN_PREFIX):
+            return line.removeprefix(NEXT_PAGE_TOKEN_PREFIX).strip() or None
+    return None
 
-    files = []
-    reader = csv.DictReader(io.StringIO(_csv_payload(result.stdout, "name,")))
-    if reader.fieldnames is None or "name" not in reader.fieldnames:
-        return FileListResult(False, details="Kaggle files response was not valid CSV")
-    for row in reader:
-        name = row.get("name", "").strip()
-        if name:
-            size_text = row.get("size", "").strip()
-            size = int(size_text) if size_text.isdigit() else None
-            files.append(CompetitionFile(name=name, size=size))
+
+def list_competition_files(slug: str) -> FileListResult:
+    files: list[CompetitionFile] = []
+    page_token: str | None = None
+    seen_tokens: set[str] = set()
+
+    for _ in range(MAX_FILE_LIST_PAGES):
+        cmd = [
+            "kaggle",
+            "competitions",
+            "files",
+            "-v",
+            slug,
+            "--page-size",
+            str(FILE_LIST_PAGE_SIZE),
+        ]
+        if page_token:
+            cmd.extend(["--page-token", page_token])
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode != 0:
+                details = _first_detail_line(result.stdout, result.stderr)
+                return FileListResult(
+                    False, details=details or "Competition files could not be listed"
+                )
+        except subprocess.TimeoutExpired:
+            return FileListResult(False, details="Kaggle files request timed out")
+        except FileNotFoundError:
+            return FileListResult(False, details="kaggle CLI not found")
+
+        reader = csv.DictReader(io.StringIO(_csv_payload(result.stdout, "name,")))
+        if reader.fieldnames is None or "name" not in reader.fieldnames:
+            return FileListResult(False, details="Kaggle files response was not valid CSV")
+        for row in reader:
+            name = (row.get("name") or "").strip()
+            if name:
+                size_text = (row.get("size") or "").strip()
+                size = int(size_text) if size_text.isdigit() else None
+                files.append(CompetitionFile(name=name, size=size))
+
+        page_token = _next_page_token(result.stdout)
+        if page_token is None or page_token in seen_tokens:
+            break
+        seen_tokens.add(page_token)
+
     return FileListResult(True, tuple(files))
 
 

@@ -259,14 +259,10 @@ def test_list_competition_files_includes_file_sizes(
     monkeypatch: pytest.MonkeyPatch,
     completed_process: type[SimpleNamespace],
 ) -> None:
-    def files_cli(*args: object, **kwargs: object) -> object:
+    def files_cli(cmd: list[str], *args: object, **kwargs: object) -> object:
         return completed_process(
             returncode=0,
-            stdout=(
-                "Next Page Token = abc\n"
-                "name,size,creationDate\n"
-                "train.csv,1536,2026-04-23 17:51:18.008000\n"
-            ),
+            stdout=("name,size,creationDate\ntrain.csv,1536,2026-04-23 17:51:18.008000\n"),
             stderr="",
         )
 
@@ -295,3 +291,75 @@ def test_list_competition_files_preserves_failure_details(
 
     assert result.success is False
     assert result.details == "Unauthorized"
+
+
+def _files_page(names: list[str], next_token: str | None = None) -> str:
+    lines = [f"Next Page Token = {next_token}"] if next_token else []
+    lines.append("name,size,creationDate")
+    lines.extend(f"{name},10,2026-04-23 17:51:18.008000" for name in names)
+    return "\n".join(lines) + "\n"
+
+
+def test_list_competition_files_follows_page_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+    completed_process: type[SimpleNamespace],
+) -> None:
+    pages = {
+        None: _files_page([f"file_{index}.csv" for index in range(200)], "page-2"),
+        "page-2": _files_page([f"file_{index}.csv" for index in range(200, 400)], "page-3"),
+        "page-3": _files_page(["train.csv", "test.csv"]),
+    }
+    commands: list[list[str]] = []
+
+    def paged_cli(cmd: list[str], *args: object, **kwargs: object) -> object:
+        commands.append(cmd)
+        token = cmd[cmd.index("--page-token") + 1] if "--page-token" in cmd else None
+        return completed_process(returncode=0, stdout=pages[token], stderr="")
+
+    monkeypatch.setattr(kaggle_api.subprocess, "run", paged_cli)
+
+    result = kaggle_api.list_competition_files("many-files")
+
+    assert result.success is True
+    assert len(result.files) == 402
+    assert result.files[-2].name == "train.csv"
+    assert len(commands) == 3
+    assert all(cmd[cmd.index("--page-size") + 1] == "200" for cmd in commands)
+    assert "--page-token" not in commands[0]
+    assert commands[1][commands[1].index("--page-token") + 1] == "page-2"
+
+
+def test_list_competition_files_stops_on_repeated_page_token(
+    monkeypatch: pytest.MonkeyPatch,
+    completed_process: type[SimpleNamespace],
+) -> None:
+    calls: list[list[str]] = []
+
+    def looping_cli(cmd: list[str], *args: object, **kwargs: object) -> object:
+        calls.append(cmd)
+        return completed_process(returncode=0, stdout=_files_page(["a.csv"], "same"), stderr="")
+
+    monkeypatch.setattr(kaggle_api.subprocess, "run", looping_cli)
+
+    result = kaggle_api.list_competition_files("looping")
+
+    assert result.success is True
+    assert len(calls) == 2
+    assert [file.name for file in result.files] == ["a.csv", "a.csv"]
+
+
+def test_list_competition_files_reports_failure_on_later_page(
+    monkeypatch: pytest.MonkeyPatch,
+    completed_process: type[SimpleNamespace],
+) -> None:
+    def failing_second_page(cmd: list[str], *args: object, **kwargs: object) -> object:
+        if "--page-token" in cmd:
+            return completed_process(returncode=1, stdout="", stderr="Rate limited")
+        return completed_process(returncode=0, stdout=_files_page(["a.csv"], "next"), stderr="")
+
+    monkeypatch.setattr(kaggle_api.subprocess, "run", failing_second_page)
+
+    result = kaggle_api.list_competition_files("flaky")
+
+    assert result.success is False
+    assert result.details == "Rate limited"
