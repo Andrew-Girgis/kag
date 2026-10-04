@@ -216,3 +216,29 @@ def test_concurrent_calls_do_not_overlap_or_leak_stream_redirection(
     assert max_active == 1
     assert sys.stdout is original_stdout
     assert sys.stderr is original_stderr
+
+
+def test_create_project_uses_prefetched_details_without_refetching(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_if_called(slug: str) -> object:
+        raise AssertionError("details were already provided")
+
+    monkeypatch.setattr(project, "fetch_competition_details", fail_if_called)
+    monkeypatch.setattr(project, "get_competition_files", lambda slug: [])
+    monkeypatch.setattr(
+        project, "fetch_competition_markdown_sections", lambda slug, **kwargs: ({}, [])
+    )
+    messages: list[str] = []
+
+    project.create_project(
+        Competition(slug="titanic", title="titanic", deadline="", reward="", team_count="0"),
+        Config(kag_path=tmp_path, auto_git=False, auto_venv=False),
+        download_files=False,
+        progress=messages.append,
+        details=kaggle_sdk.CompetitionDetails(slug="titanic", title="Titanic Prefetched"),
+    )
+
+    assert "Fetching competition details..." not in messages
+    assert (tmp_path / "titanic" / "notes.md").read_text().startswith("# Titanic Prefetched")

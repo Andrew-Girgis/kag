@@ -423,6 +423,7 @@ def create_project(
     editor: str | None = None,
     progress: Callable[[str], None] | None = None,
     cancel: threading.Event | None = None,
+    details: CompetitionDetails | None = None,
 ) -> str | None:
     def report(message: str) -> None:
         if progress is not None:
@@ -440,9 +441,10 @@ def create_project(
 
     try:
         check_cancel()
-        report("Fetching competition details...")
-        details = fetch_competition_details(competition.slug)
-        check_cancel()
+        if details is None:
+            report("Fetching competition details...")
+            details = fetch_competition_details(competition.slug)
+            check_cancel()
         report("Fetching competition notes...")
         sections, extract_warnings = fetch_competition_markdown_sections(
             competition.slug, cancel=cancel
