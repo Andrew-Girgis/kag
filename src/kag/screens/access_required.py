@@ -1,3 +1,4 @@
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
@@ -22,6 +23,7 @@ class AccessRequiredScreen(Screen):
         super().__init__(**kwargs)
         self.competition = competition
         self.details = details
+        self._checking_access = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="access-dialog"):
@@ -59,7 +61,19 @@ class AccessRequiredScreen(Screen):
             self.dismiss(AccessRequiredScreen.Resolved(self.competition, download_files=False))
 
     def _retry_access(self) -> None:
+        if self._checking_access:
+            return
+        self._checking_access = True
+        self._set_checking(True)
+        self._check_access()
+
+    @work(thread=True)
+    def _check_access(self) -> None:
         access_ok, details = check_competition_access(self.competition.slug)
+        self.app.call_from_thread(self._on_access_checked, access_ok, details)
+
+    def _on_access_checked(self, access_ok: bool, details: str) -> None:
+        self._checking_access = False
         if access_ok:
             self.dismiss(
                 AccessRequiredScreen.Resolved(self.competition, download_files=True, is_joined=True)
@@ -67,11 +81,18 @@ class AccessRequiredScreen(Screen):
             return
 
         self.details = details
+        self._set_checking(False)
+
+    def _set_checking(self, checking: bool) -> None:
         try:
             details_widget = self.query_one("#access-details", Static)
+            options = self.query_one("#access-options", ListView)
         except Exception:
             return
-        details_widget.update(f"Kaggle said: {self.details}")
+        details_widget.update(
+            "Checking access with Kaggle..." if checking else f"Kaggle said: {self.details}"
+        )
+        options.disabled = checking
 
     def action_cancel(self) -> None:
         self.dismiss(None)

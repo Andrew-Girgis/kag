@@ -67,16 +67,21 @@ def test_download_confirmation_denied_access_pushes_access_required_screen(
     app = KagApp(Config(kag_path=tmp_path))
     pushed_screens: list[object] = []
 
-    monkeypatch.setattr(tui, "check_competition_access", lambda slug: (False, "403 Forbidden"))
     monkeypatch.setattr(
         app, "push_screen", lambda screen, callback=None: pushed_screens.append(screen)
     )
 
     app._on_download_confirmed(
-        ConfirmDownloadScreen.Confirmed(competition=competition, download_files=True)
+        ConfirmDownloadScreen.Confirmed(
+            competition=competition,
+            download_files=True,
+            access_ok=False,
+            access_details="403 Forbidden",
+        )
     )
 
     assert isinstance(pushed_screens[0], AccessRequiredScreen)
+    assert pushed_screens[0].details == "403 Forbidden"
     assert app.result is None
 
 
@@ -94,11 +99,6 @@ def test_competition_selection_not_joined_pushes_access_required_before_download
     app = KagApp(Config(kag_path=tmp_path))
     pushed_screens: list[object] = []
 
-    monkeypatch.setattr(
-        tui,
-        "check_competition_access",
-        lambda slug: (_ for _ in ()).throw(AssertionError("access check should not run first")),
-    )
     monkeypatch.setattr(
         app, "push_screen", lambda screen, callback=None: pushed_screens.append(screen)
     )
@@ -125,11 +125,6 @@ def test_competition_selection_access_success_pushes_download_prompt(
     pushed_screens: list[object] = []
 
     monkeypatch.setattr(
-        tui,
-        "check_competition_access",
-        lambda slug: (_ for _ in ()).throw(AssertionError("access check should not run first")),
-    )
-    monkeypatch.setattr(
         app, "push_screen", lambda screen, callback=None: pushed_screens.append(screen)
     )
 
@@ -152,7 +147,6 @@ def test_download_confirmation_access_success_pushes_editor_screen(
     app = KagApp(Config(kag_path=tmp_path))
     pushed_screens: list[object] = []
 
-    monkeypatch.setattr(tui, "check_competition_access", lambda slug: (True, "Access confirmed"))
     monkeypatch.setattr(
         app, "push_screen", lambda screen, callback=None: pushed_screens.append(screen)
     )
@@ -184,9 +178,7 @@ def test_access_required_join_opens_kaggle_and_retries_access(
         lambda slug, page: opened_pages.append((slug, page)),
     )
     monkeypatch.setattr(
-        screens.access_required,
-        "check_competition_access",
-        lambda slug: (True, "Access confirmed"),
+        screen, "_check_access", lambda: screen._on_access_checked(True, "Access confirmed")
     )
     monkeypatch.setattr(screen, "dismiss", lambda result=None: dismissed.append(result))
 
@@ -221,9 +213,7 @@ def test_access_required_already_joined_retries_without_opening_browser(
         lambda slug, page: opened_pages.append((slug, page)),
     )
     monkeypatch.setattr(
-        screens.access_required,
-        "check_competition_access",
-        lambda slug: (True, "Access confirmed"),
+        screen, "_check_access", lambda: screen._on_access_checked(True, "Access confirmed")
     )
     monkeypatch.setattr(screen, "dismiss", lambda result=None: dismissed.append(result))
 
@@ -251,14 +241,9 @@ def test_access_required_retry_success_dismisses_to_download(
     screen = AccessRequiredScreen(competition, "403 Forbidden")
     dismissed: list[AccessRequiredScreen.Resolved | None] = []
 
-    monkeypatch.setattr(
-        screens.access_required,
-        "check_competition_access",
-        lambda slug: (True, "Access confirmed"),
-    )
     monkeypatch.setattr(screen, "dismiss", lambda result=None: dismissed.append(result))
 
-    screen._retry_access()
+    screen._on_access_checked(True, "Access confirmed")
 
     assert dismissed
     assert dismissed[0] is not None
@@ -278,17 +263,12 @@ def test_access_required_retry_failure_preserves_details(
     screen = AccessRequiredScreen(competition, "403 Forbidden")
     dismissed: list[object] = []
 
-    monkeypatch.setattr(
-        screens.access_required,
-        "check_competition_access",
-        lambda slug: (False, "still forbidden"),
-    )
     monkeypatch.setattr(screen, "dismiss", lambda result=None: dismissed.append(result))
     monkeypatch.setattr(
         screen, "query_one", lambda *args, **kwargs: (_ for _ in ()).throw(Exception())
     )
 
-    screen._retry_access()
+    screen._on_access_checked(False, "still forbidden")
 
     assert dismissed == []
     assert screen.details == "still forbidden"
@@ -342,3 +322,37 @@ def test_missing_update_notice_does_not_notify(tmp_path, monkeypatch: pytest.Mon
     app._show_update_notice(None)
 
     assert notifications == []
+
+
+def test_editor_selected_unexpected_error_notifies_instead_of_crashing(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    competition = Competition(
+        slug="disk-full",
+        title="Disk Full",
+        deadline="",
+        reward="",
+        team_count="0",
+    )
+    app = KagApp(Config(kag_path=tmp_path))
+    notifications: list[str] = []
+    pushed_screens: list[object] = []
+
+    def broken_create_project(**kwargs: object) -> str:
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(tui, "create_project", broken_create_project)
+    monkeypatch.setattr(app, "notify", lambda message, **kwargs: notifications.append(message))
+    monkeypatch.setattr(
+        app, "push_screen", lambda screen, callback=None: pushed_screens.append(screen)
+    )
+    monkeypatch.setattr(app, "exit", lambda *args, **kwargs: None)
+
+    app._on_editor_selected(
+        EditorSelectScreen.Selected(competition=competition, download_files=True, editor=None)
+    )
+
+    assert app.result is None
+    assert notifications == ["Project creation failed: No space left on device"]
+    assert isinstance(pushed_screens[0], ConfirmDownloadScreen)

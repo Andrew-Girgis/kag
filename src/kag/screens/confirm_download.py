@@ -4,7 +4,12 @@ from textual.binding import Binding
 from textual.containers import Vertical
 from textual.widgets import Static, Label, ListView, ListItem
 
-from ..kaggle_api import Competition, FileListResult, list_competition_files
+from ..kaggle_api import (
+    Competition,
+    FileListResult,
+    check_competition_access,
+    list_competition_files,
+)
 from textual import work
 
 
@@ -14,14 +19,24 @@ class ConfirmDownloadScreen(Screen):
     ]
 
     class Confirmed:
-        def __init__(self, competition: Competition, download_files: bool):
+        def __init__(
+            self,
+            competition: Competition,
+            download_files: bool,
+            access_ok: bool = True,
+            access_details: str = "",
+        ):
             self.competition = competition
             self.download_files = download_files
+            self.access_ok = access_ok
+            self.access_details = access_details
 
     def __init__(self, competition: Competition, **kwargs):
         super().__init__(**kwargs)
         self.competition = competition
         self.files: list[str] = []
+        self._files_listed = False
+        self._checking_access = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="confirm-dialog"):
@@ -54,6 +69,7 @@ class ConfirmDownloadScreen(Screen):
 
     def _on_files_loaded(self, result: FileListResult) -> None:
         self.files = list(result.files) if result.success else []
+        self._files_listed = result.success
         try:
             files_widget = self.query_one("#comp-files", Static)
             question_widget = self.query_one("#download-question", Static)
@@ -86,11 +102,35 @@ class ConfirmDownloadScreen(Screen):
         options.index = 0
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
+        if self._checking_access:
+            return
         item_id = event.item.id
         if item_id == "opt-yes":
-            self.dismiss(ConfirmDownloadScreen.Confirmed(self.competition, download_files=True))
+            if self._files_listed:
+                self.dismiss(ConfirmDownloadScreen.Confirmed(self.competition, download_files=True))
+                return
+            self._checking_access = True
+            self.query_one("#download-question", Static).update("Checking access with Kaggle...")
+            self.query_one("#download-options", ListView).disabled = True
+            self._check_access()
         elif item_id == "opt-no":
             self.dismiss(ConfirmDownloadScreen.Confirmed(self.competition, download_files=False))
+
+    @work(thread=True)
+    def _check_access(self) -> None:
+        access_ok, details = check_competition_access(self.competition.slug)
+        self.app.call_from_thread(self._on_access_checked, access_ok, details)
+
+    def _on_access_checked(self, access_ok: bool, details: str) -> None:
+        self._checking_access = False
+        self.dismiss(
+            ConfirmDownloadScreen.Confirmed(
+                self.competition,
+                download_files=True,
+                access_ok=access_ok,
+                access_details=details,
+            )
+        )
 
     def action_cancel(self) -> None:
         self.dismiss(None)
