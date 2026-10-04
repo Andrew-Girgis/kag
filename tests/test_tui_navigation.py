@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from textual.widgets import Input, ListView
 
@@ -58,7 +60,7 @@ def _highlighted_slug(app: KagApp) -> str | None:
 
 @pytest.mark.asyncio
 async def test_escape_from_download_prompt_returns_to_picker_with_search(
-    tmp_path,
+    tmp_path: Path,
     stub_kaggle: None,
 ) -> None:
     app = KagApp(Config(kag_path=tmp_path), initial_query="tita")
@@ -80,7 +82,7 @@ async def test_escape_from_download_prompt_returns_to_picker_with_search(
 
 @pytest.mark.asyncio
 async def test_escape_from_access_required_returns_to_picker(
-    tmp_path,
+    tmp_path: Path,
     stub_kaggle: None,
 ) -> None:
     app = KagApp(Config(kag_path=tmp_path), initial_query="tide")
@@ -102,7 +104,7 @@ async def test_escape_from_access_required_returns_to_picker(
 
 @pytest.mark.asyncio
 async def test_escape_from_editor_select_returns_to_picker(
-    tmp_path,
+    tmp_path: Path,
     stub_kaggle: None,
 ) -> None:
     app = KagApp(Config(kag_path=tmp_path), initial_query="tita")
@@ -126,7 +128,7 @@ async def test_escape_from_editor_select_returns_to_picker(
 
 
 @pytest.mark.asyncio
-async def test_escape_on_picker_still_quits(tmp_path, stub_kaggle: None) -> None:
+async def test_escape_on_picker_still_quits(tmp_path: Path, stub_kaggle: None) -> None:
     app = KagApp(Config(kag_path=tmp_path))
 
     async with app.run_test() as pilot:
