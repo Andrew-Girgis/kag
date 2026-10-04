@@ -182,6 +182,7 @@ def get_competition_details(slug: str) -> CompetitionDetails:
 class CompetitionPage:
     name: str
     content: str
+    title: str = ""
 
 
 @dataclass(frozen=True)
@@ -195,7 +196,11 @@ class NotebookSummary:
 def list_competition_pages(slug: str) -> list[CompetitionPage]:
     pages = _call(lambda api: api.competition_list_pages(slug))
     return [
-        CompetitionPage(name=_text(page.name), content=page.content or "")
+        CompetitionPage(
+            name=_text(page.name),
+            content=page.content or "",
+            title=_text(getattr(page, "post_title", "")),
+        )
         for page in (pages or [])
         if _text(page.name)
     ]

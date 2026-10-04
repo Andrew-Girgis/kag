@@ -121,3 +121,31 @@ def test_demote_headings_leaves_code_fences_alone() -> None:
     assert notes_fetcher._demote_headings(markdown) == (
         "#### Title\n\n```python\n# not a heading\n```\n\n##### Sub"
     )
+
+
+def test_page_display_title_is_preferred(
+    fake_sdk: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        kaggle_sdk,
+        "list_competition_pages",
+        lambda slug: [CompetitionPage("abstract", "Summary.", title="Competition Summary")],
+    )
+
+    sections, _ = notes_fetcher.fetch_competition_markdown_sections("titanic")
+
+    assert sections["Overview"].startswith("### Competition Summary\n\nSummary.")
+
+
+def test_markdown_with_fenced_html_example_is_not_converted() -> None:
+    content = 'Use this markup:\n\n```html\n<div class="x">keep me</div>\n```\n'
+
+    assert notes_fetcher._page_markdown(content, "titanic") == content.strip()
+
+
+def test_setext_headings_are_demoted() -> None:
+    markdown = "Title\n=====\n\nIntro\n\nSub\n---\n\n- item\n---\n\n```\nCode\n===\n```"
+
+    assert notes_fetcher._demote_headings(markdown) == (
+        "#### Title\n\nIntro\n\n##### Sub\n\n- item\n---\n\n```\nCode\n===\n```"
+    )

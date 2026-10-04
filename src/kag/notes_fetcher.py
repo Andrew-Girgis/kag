@@ -13,6 +13,8 @@ HTML_TAG_PATTERN = re.compile(
 )
 HEADING_PATTERN = re.compile(r"^(#{1,6})(\s+.*)$")
 FENCE_PATTERN = re.compile(r"^\s*(```|~~~)")
+FENCED_BLOCK_PATTERN = re.compile(r"^\s*(```|~~~).*?^\s*\1[^\n]*$", re.MULTILINE | re.DOTALL)
+SETEXT_UNDERLINE_PATTERN = re.compile(r"^\s{0,3}(=+|-+)\s*$")
 
 
 def _html_to_markdown(html: str, base_url: str) -> str:
@@ -36,15 +38,49 @@ def _html_to_markdown(html: str, base_url: str) -> str:
     return markdown.strip()
 
 
+def _is_html(content: str) -> bool:
+    return bool(HTML_TAG_PATTERN.search(FENCED_BLOCK_PATTERN.sub("", content)))
+
+
+def _setext_to_atx(markdown: str) -> str:
+    lines = markdown.splitlines()
+    converted: list[str] = []
+    in_fence = False
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if FENCE_PATTERN.match(line):
+            in_fence = not in_fence
+            converted.append(line)
+            index += 1
+            continue
+        following = lines[index + 1] if index + 1 < len(lines) else ""
+        underline = SETEXT_UNDERLINE_PATTERN.match(following)
+        is_text = (
+            line.strip()
+            and not in_fence
+            and not HEADING_PATTERN.match(line)
+            and not line.lstrip().startswith(("-", "*", "+", ">", "|"))
+        )
+        if underline and is_text and not FENCE_PATTERN.match(following):
+            level = "#" if underline.group(1).startswith("=") else "##"
+            converted.append(f"{level} {line.strip()}")
+            index += 2
+            continue
+        converted.append(line)
+        index += 1
+    return "\n".join(converted)
+
+
 def _page_markdown(content: str, slug: str) -> str:
     base_url = f"{BASE_WEB_URL}/competitions/{slug}/overview"
-    if HTML_TAG_PATTERN.search(content):
+    if _is_html(content):
         return _html_to_markdown(content, base_url)
     return re.sub(r"\n{3,}", "\n\n", content.replace("\r\n", "\n")).strip()
 
 
 def _demote_headings(markdown: str, minimum_level: int = SECTION_HEADING_LEVEL) -> str:
-    lines = markdown.splitlines()
+    lines = _setext_to_atx(markdown).splitlines()
     in_fence = False
     levels: list[int] = []
     for line in lines:
@@ -55,10 +91,10 @@ def _demote_headings(markdown: str, minimum_level: int = SECTION_HEADING_LEVEL) 
         if match and not in_fence:
             levels.append(len(match.group(1)))
     if not levels:
-        return markdown
+        return "\n".join(lines)
     shift = max(0, minimum_level - min(levels))
     if shift == 0:
-        return markdown
+        return "\n".join(lines)
 
     demoted: list[str] = []
     in_fence = False
@@ -132,7 +168,7 @@ def fetch_competition_markdown_sections(
         content = _page_markdown(page.content, slug)
         if not content:
             continue
-        chunk = f"### {_page_title(page.name)}\n\n{_demote_headings(content)}"
+        chunk = f"### {page.title or _page_title(page.name)}\n\n{_demote_headings(content)}"
         parts.setdefault(_section_for(page.name), []).append(chunk)
     for name, chunks in parts.items():
         sections[name] = "\n\n".join(chunks).strip()
