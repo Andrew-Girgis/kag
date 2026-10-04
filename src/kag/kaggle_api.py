@@ -91,6 +91,7 @@ class FileListResult:
     success: bool
     files: tuple[CompetitionFile, ...] = ()
     details: str = ""
+    truncated: bool = False
 
 
 def _first_detail_line(stdout: str, stderr: str) -> str:
@@ -106,6 +107,15 @@ def _csv_payload(text: str, expected_header: str) -> str:
         if line.startswith(expected_header):
             return "\n".join(lines[index:])
     return text
+
+
+def _next_page_token(text: str, expected_header: str) -> str | None:
+    for line in text.splitlines():
+        if line.startswith(expected_header):
+            return None
+        if line.startswith(NEXT_PAGE_TOKEN_PREFIX):
+            return line.removeprefix(NEXT_PAGE_TOKEN_PREFIX).strip() or None
+    return None
 
 
 def list_competitions_page(
@@ -166,7 +176,7 @@ def list_competitions_page(
                 is_joined=(row.get("userHasEntered") or "").strip().lower() == "true",
             )
         )
-    has_more = NEXT_PAGE_TOKEN_PREFIX in stdout or len(competitions) >= page_size
+    has_more = _next_page_token(stdout, "ref,") is not None or len(competitions) >= page_size
     return competitions, has_more
 
 
@@ -187,13 +197,6 @@ def list_competitions(
 
 def list_entered_competitions() -> list[Competition]:
     return list_competitions(group="entered")
-
-
-def _next_page_token(text: str) -> str | None:
-    for line in text.splitlines():
-        if line.startswith(NEXT_PAGE_TOKEN_PREFIX):
-            return line.removeprefix(NEXT_PAGE_TOKEN_PREFIX).strip() or None
-    return None
 
 
 def list_competition_files(slug: str) -> FileListResult:
@@ -235,12 +238,17 @@ def list_competition_files(slug: str) -> FileListResult:
                 size = int(size_text) if size_text.isdigit() else None
                 files.append(CompetitionFile(name=name, size=size))
 
-        page_token = _next_page_token(result.stdout)
+        page_token = _next_page_token(result.stdout, "name,")
         if page_token is None or page_token in seen_tokens:
-            break
+            return FileListResult(True, tuple(files))
         seen_tokens.add(page_token)
 
-    return FileListResult(True, tuple(files))
+    return FileListResult(
+        True,
+        tuple(files),
+        details=f"Listing stopped after {len(files)} files",
+        truncated=True,
+    )
 
 
 def get_competition_files(slug: str) -> list[str]:

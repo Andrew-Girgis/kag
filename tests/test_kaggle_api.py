@@ -363,3 +363,74 @@ def test_list_competition_files_reports_failure_on_later_page(
 
     assert result.success is False
     assert result.details == "Rate limited"
+
+
+def test_list_competition_files_ignores_token_text_in_data_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    completed_process: type[SimpleNamespace],
+) -> None:
+    calls: list[list[str]] = []
+
+    def last_page(cmd: list[str], *args: object, **kwargs: object) -> object:
+        calls.append(cmd)
+        return completed_process(
+            returncode=0,
+            stdout=_files_page(["train.csv", "Next Page Token = odd-name.csv"]),
+            stderr="",
+        )
+
+    monkeypatch.setattr(kaggle_api.subprocess, "run", last_page)
+
+    result = kaggle_api.list_competition_files("odd-names")
+
+    assert result.success is True
+    assert result.truncated is False
+    assert len(calls) == 1
+    assert [file.name for file in result.files] == ["train.csv", "Next Page Token = odd-name.csv"]
+
+
+def test_list_competition_files_flags_truncation_at_page_cap(
+    monkeypatch: pytest.MonkeyPatch,
+    completed_process: type[SimpleNamespace],
+) -> None:
+    calls: list[list[str]] = []
+
+    def endless_pages(cmd: list[str], *args: object, **kwargs: object) -> object:
+        calls.append(cmd)
+        return completed_process(
+            returncode=0,
+            stdout=_files_page([f"file_{len(calls)}.csv"], f"token-{len(calls)}"),
+            stderr="",
+        )
+
+    monkeypatch.setattr(kaggle_api.subprocess, "run", endless_pages)
+
+    result = kaggle_api.list_competition_files("endless")
+
+    assert len(calls) == kaggle_api.MAX_FILE_LIST_PAGES
+    assert result.success is True
+    assert result.truncated is True
+    assert len(result.files) == kaggle_api.MAX_FILE_LIST_PAGES
+    assert "stopped after" in result.details
+
+
+def test_list_competitions_page_ignores_token_text_after_header(
+    monkeypatch: pytest.MonkeyPatch,
+    completed_process: type[SimpleNamespace],
+) -> None:
+    def cli_output(*args: object, **kwargs: object) -> object:
+        return completed_process(
+            returncode=0,
+            stdout=(
+                "ref,deadline,category,reward,teamCount,userHasEntered,userRank\n"
+                "titanic,2030-01-01 00:00:00,Getting Started,Next Page Token = x,1,False,\n"
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(kaggle_api.subprocess, "run", cli_output)
+
+    competitions, has_more = kaggle_api.list_competitions_page(page_size=20)
+
+    assert len(competitions) == 1
+    assert has_more is False

@@ -73,6 +73,8 @@ class ConfirmDownloadScreen(Screen):
             )
             if len(result.files) > 10:
                 file_list += f"\n  ... and {len(result.files) - 10} more"
+            if result.truncated:
+                file_list += f"\n  (list truncated: {result.details})"
             files_widget.update(f"Files:\n{file_list}")
         else:
             files_widget.update(f"Files:\n  Could not list files: {result.details}")
