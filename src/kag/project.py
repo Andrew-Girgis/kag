@@ -251,6 +251,7 @@ def _extract_zip_safely(zip_path: Path, destination: Path) -> list[str]:
     warnings: list[str] = []
     destination.mkdir(parents=True, exist_ok=True)
 
+    kept_existing: list[str] = []
     with zipfile.ZipFile(zip_path, "r") as archive:
         for member in archive.infolist():
             target = _safe_zip_target(member.filename, destination)
@@ -265,9 +266,19 @@ def _extract_zip_safely(zip_path: Path, destination: Path) -> list[str]:
                 continue
 
             target.parent.mkdir(parents=True, exist_ok=True)
-            with archive.open(member, "r") as source, target.open("wb") as output:
+            try:
+                output = target.open("xb")
+            except FileExistsError:
+                kept_existing.append(member.filename)
+                continue
+            with archive.open(member, "r") as source, output:
                 shutil.copyfileobj(source, output)
 
+    if kept_existing:
+        warnings.append(
+            f"Kept {len(kept_existing)} existing file(s) instead of overwriting them from "
+            f"`{zip_path.name}` (e.g. `{kept_existing[0]}`). Delete a file to extract it again."
+        )
     return warnings
 
 

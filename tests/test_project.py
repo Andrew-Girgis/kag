@@ -597,3 +597,19 @@ def test_create_project_still_sets_up_git_for_new_projects(
     )
 
     assert ["git", "init"] in commands
+
+
+def test_extract_zip_safely_keeps_existing_files(tmp_path: Path) -> None:
+    zip_path = tmp_path / "competition.zip"
+    _write_zip(zip_path, {"train.csv": "fresh", "test.csv": "fresh"})
+    destination = tmp_path / "data"
+    destination.mkdir()
+    (destination / "train.csv").write_text("MY EDITED DATA")
+
+    warnings = _extract_zip_safely(zip_path, destination)
+
+    assert (destination / "train.csv").read_text() == "MY EDITED DATA"
+    assert (destination / "test.csv").read_text() == "fresh"
+    assert len(warnings) == 1
+    assert "Kept 1 existing file" in warnings[0]
+    assert "train.csv" in warnings[0]

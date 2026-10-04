@@ -7,7 +7,7 @@ from textual.widgets import Input, ListView
 
 from kag.config import Config
 from kag.kaggle_api import Competition, CompetitionFile, FileListResult
-from kag.screens import competition_list, confirm_download
+from kag.screens import competition_list, confirm_download, existing_project
 from kag.screens.access_required import AccessRequiredScreen
 from kag.screens.competition_list import CompetitionListScreen
 from kag.screens.confirm_download import ConfirmDownloadScreen
@@ -229,3 +229,21 @@ def _focus_remote_item(app: KagApp, slug: str) -> None:
             results.focus()
             return
     raise AssertionError(f"{slug} not found in picker results")
+
+
+def test_describe_data_dir_caps_file_count(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+
+    assert existing_project._describe_data_dir(data_dir) == "missing"
+    data_dir.mkdir()
+    assert existing_project._describe_data_dir(data_dir) == "empty"
+    for index in range(3):
+        (data_dir / f"{index}.csv").write_text("x")
+    assert existing_project._describe_data_dir(data_dir) == "3 files"
+
+    for index in range(existing_project.DATA_FILE_COUNT_LIMIT + 5):
+        (data_dir / f"extra_{index}.csv").write_text("x")
+    assert (
+        existing_project._describe_data_dir(data_dir)
+        == f"{existing_project.DATA_FILE_COUNT_LIMIT}+ files"
+    )

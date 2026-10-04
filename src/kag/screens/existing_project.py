@@ -9,6 +9,21 @@ from textual.widgets import Label, ListItem, ListView, Static
 from ..kaggle_api import Competition
 
 
+DATA_FILE_COUNT_LIMIT = 1000
+
+
+def _describe_data_dir(data_dir: Path) -> str:
+    if not data_dir.is_dir():
+        return "missing"
+    count = 0
+    for path in data_dir.rglob("*"):
+        if path.is_file():
+            count += 1
+            if count >= DATA_FILE_COUNT_LIMIT:
+                return f"{DATA_FILE_COUNT_LIMIT}+ files"
+    return f"{count} files" if count else "empty"
+
+
 class ExistingProjectScreen(Screen):
     BINDINGS = [
         Binding("escape", "cancel", "Cancel", show=True),
@@ -28,13 +43,10 @@ class ExistingProjectScreen(Screen):
     def _summary_lines(self) -> list[str]:
         notebook = self.project_dir / f"{self.competition.slug}.ipynb"
         data_dir = self.project_dir / "data"
-        data_files = (
-            sum(1 for path in data_dir.rglob("*") if path.is_file()) if data_dir.is_dir() else 0
-        )
         return [
             f"  Notebook: {'yes' if notebook.exists() else 'missing'}",
             f"  notes.md: {'yes' if (self.project_dir / 'notes.md').exists() else 'missing'}",
-            f"  data/: {f'{data_files} files' if data_files else 'missing'}",
+            f"  data/: {_describe_data_dir(data_dir)}",
             f"  Git repo: {'yes' if (self.project_dir / '.git').exists() else 'no'}",
         ]
 
