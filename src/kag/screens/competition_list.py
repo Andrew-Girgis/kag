@@ -3,6 +3,7 @@ from textual.app import ComposeResult
 from textual.screen import Screen
 from textual.widgets import Input, Static, ListView, ListItem, Label
 from textual.binding import Binding
+from textual.message import Message
 from rich.text import Text
 import time
 from ..config import Config
@@ -49,10 +50,11 @@ class CompetitionListScreen(Screen):
         Binding("escape", "quit", "Quit", show=True),
     ]
 
-    class Selected:
+    class Selected(Message):
         def __init__(
             self, competition: Competition, is_local: bool = False, project_path: str | None = None
         ):
+            super().__init__()
             self.competition = competition
             self.is_local = is_local
             self.project_path = project_path
@@ -607,7 +609,7 @@ class CompetitionListScreen(Screen):
                 reward="",
                 team_count="0",
             )
-            self.dismiss(
+            self.post_message(
                 CompetitionListScreen.Selected(
                     competition, is_local=True, project_path=selected.path
                 )
@@ -615,7 +617,7 @@ class CompetitionListScreen(Screen):
             return
 
         if isinstance(selected, Competition):
-            self.dismiss(CompetitionListScreen.Selected(competition=selected))
+            self.post_message(CompetitionListScreen.Selected(competition=selected))
             return
 
     def action_quit(self) -> None:

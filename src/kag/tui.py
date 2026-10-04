@@ -82,10 +82,7 @@ class KagApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.push_screen(
-            CompetitionListScreen(self.config, initial_query=self.initial_query),
-            self._on_competition_selected,
-        )
+        self.push_screen(CompetitionListScreen(self.config, initial_query=self.initial_query))
         self._check_for_update()
 
     @work(thread=True)
@@ -98,6 +95,9 @@ class KagApp(App):
         if notice is None:
             return
         self.notify(notice.message, severity="information", timeout=12)
+
+    def on_competition_list_screen_selected(self, message: CompetitionListScreen.Selected) -> None:
+        self._on_competition_selected(message)
 
     def _on_competition_selected(self, result: CompetitionListScreen.Selected | None) -> None:
         if result is None:
