@@ -458,3 +458,34 @@ async def test_project_creation_error_returns_to_download_prompt(
 
         assert isinstance(app.screen, ConfirmDownloadScreen)
         assert app.result is None
+
+
+@pytest.mark.asyncio
+async def test_quitting_during_project_creation_signals_cancel(
+    tmp_path: Path,
+    stub_kaggle: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = threading.Event()
+    saw_cancel = threading.Event()
+
+    def slow_create_project(**kwargs: object) -> str:
+        cancel = kwargs["cancel"]
+        started.set()
+        if cancel.wait(timeout=5):  # type: ignore[attr-defined]
+            saw_cancel.set()
+        raise ProjectCreationCancelled("Project setup cancelled")
+
+    monkeypatch.setattr(creating_project, "create_project", slow_create_project)
+    app = KagApp(Config(kag_path=tmp_path), initial_query="tita")
+
+    async with app.run_test() as pilot:
+        await _reach_editor_select(app, pilot)
+        _select_terminal_only(app)
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+        assert started.is_set()
+        await pilot.press("q")
+        await pilot.pause(0.3)
+
+    assert saw_cancel.wait(timeout=2)

@@ -764,3 +764,82 @@ def test_create_project_stops_before_download_when_cancelled_early(
         )
 
     assert not (tmp_path / "titanic").exists()
+
+
+def test_cancel_after_download_rolls_back_downloaded_and_extracted_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_download_sources(monkeypatch)
+    project_dir = tmp_path / "titanic"
+    (project_dir / "data").mkdir(parents=True)
+    (project_dir / "data" / "mine.csv").write_text("MY DATA")
+    (project_dir / "titanic.ipynb").write_text("MY NOTEBOOK")
+    cancel = threading.Event()
+
+    def finished_download(
+        slug: str, data_dir: str, progress=None, cancel=None, **kwargs: object
+    ) -> DownloadResult:
+        _write_zip(Path(data_dir) / "titanic.zip", {"train.csv": "a\n", "test.csv": "b\n"})
+        return DownloadResult(True, "Download completed", ("titanic.zip",))
+
+    def cancel_during_extraction(zip_path: Path, destination: Path, cancel=None) -> list[str]:
+        (destination / "train.csv").write_text("partial")
+        cancel.set()
+        raise project.ProjectCreationCancelled("Project setup cancelled")
+
+    monkeypatch.setattr(project, "download_competition", finished_download)
+    monkeypatch.setattr(project, "_extract_zip_safely", cancel_during_extraction)
+
+    with pytest.raises(project.ProjectCreationCancelled):
+        project.create_project(
+            _existing_competition(),
+            Config(kag_path=tmp_path, auto_git=False, auto_venv=False),
+            download_files=True,
+            cancel=cancel,
+        )
+
+    assert sorted(path.name for path in (project_dir / "data").iterdir()) == ["mine.csv"]
+    assert (project_dir / "data" / "mine.csv").read_text() == "MY DATA"
+    assert (project_dir / "titanic.ipynb").read_text() == "MY NOTEBOOK"
+    assert not (project_dir / "notes.md").exists()
+
+
+def test_cancel_after_writing_notes_removes_files_added_by_this_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_project_sources(monkeypatch)
+    project_dir = tmp_path / "titanic"
+    project_dir.mkdir()
+    (project_dir / "titanic.ipynb").write_text("MY NOTEBOOK")
+    cancel = threading.Event()
+
+    def cancel_after_notes(message: str) -> None:
+        if message == "Writing notebook and notes...":
+            cancel.set()
+
+    with pytest.raises(project.ProjectCreationCancelled):
+        project.create_project(
+            _existing_competition(),
+            Config(kag_path=tmp_path, auto_git=False, auto_venv=False),
+            download_files=False,
+            progress=cancel_after_notes,
+            cancel=cancel,
+        )
+
+    assert sorted(path.name for path in project_dir.iterdir()) == ["titanic.ipynb"]
+    assert (project_dir / "titanic.ipynb").read_text() == "MY NOTEBOOK"
+
+
+def test_extract_zip_safely_stops_when_cancelled(tmp_path: Path) -> None:
+    zip_path = tmp_path / "big.zip"
+    _write_zip(zip_path, {"a.csv": "x" * 10, "b.csv": "y" * 10})
+    destination = tmp_path / "data"
+    cancel = threading.Event()
+    cancel.set()
+
+    with pytest.raises(project.ProjectCreationCancelled):
+        _extract_zip_safely(zip_path, destination, cancel=cancel)
+
+    assert not (destination / "b.csv").exists()

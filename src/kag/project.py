@@ -9,6 +9,7 @@ import unicodedata
 import zipfile
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from typing import BinaryIO
 
 from .config import Config
 from .kaggle_api import (
@@ -41,6 +42,7 @@ STARTER_NOTEBOOK = {
 
 
 MAX_NOTEBOOK_CSV_LOADS = 10
+EXTRACT_CHUNK_SIZE = 1024 * 1024
 EDITOR_LOG_DIR = Path(".kag") / "logs"
 RESERVED_NOTEBOOK_NAMES = {"pd", "np", "plt", "sns", "data_path", "train_test_split"}
 
@@ -253,7 +255,23 @@ def _safe_zip_target(member_name: str, destination: Path) -> Path | None:
     return target
 
 
-def _extract_zip_safely(zip_path: Path, destination: Path) -> list[str]:
+def _copy_with_cancel(
+    source: BinaryIO, output: BinaryIO, cancel: threading.Event | None
+) -> None:
+    while True:
+        if cancel is not None and cancel.is_set():
+            raise ProjectCreationCancelled("Project setup cancelled")
+        chunk = source.read(EXTRACT_CHUNK_SIZE)
+        if not chunk:
+            return
+        output.write(chunk)
+
+
+def _extract_zip_safely(
+    zip_path: Path,
+    destination: Path,
+    cancel: threading.Event | None = None,
+) -> list[str]:
     warnings: list[str] = []
     destination.mkdir(parents=True, exist_ok=True)
 
@@ -278,7 +296,7 @@ def _extract_zip_safely(zip_path: Path, destination: Path) -> list[str]:
                 kept_existing.append(member.filename)
                 continue
             with archive.open(member, "r") as source, output:
-                shutil.copyfileobj(source, output)
+                _copy_with_cancel(source, output, cancel)
 
     if kept_existing:
         warnings.append(
@@ -363,6 +381,7 @@ def create_project(
     project_dir = config.kag_path / competition.slug
     project_existed = project_dir.exists()
     project_had_content = existing_project_dir(config, competition.slug) is not None
+    existing_paths = set(project_dir.rglob("*")) if project_existed else set()
     project_dir.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -390,7 +409,6 @@ def create_project(
         if download_permitted:
             data_dir = project_dir / "data"
             data_dir.mkdir(exist_ok=True)
-            existing_data = set(data_dir.rglob("*"))
             report("Downloading data...")
             download_result = download_competition(
                 competition.slug,
@@ -399,7 +417,6 @@ def create_project(
                 cancel=cancel,
             )
             if not download_result.success:
-                _remove_new_paths(data_dir, existing_data)
                 if download_result.cancelled:
                     raise ProjectCreationCancelled("Project setup cancelled")
                 raise ProjectCreationError(
@@ -410,7 +427,7 @@ def create_project(
             for zf in zip_files:
                 check_cancel()
                 report(f"Extracting {zf.name}...")
-                extract_warnings.extend(_extract_zip_safely(zf, data_dir))
+                extract_warnings.extend(_extract_zip_safely(zf, data_dir, cancel=cancel))
 
         if listed_files is not None:
             files = listed_files
@@ -491,6 +508,8 @@ def create_project(
 
         return str(project_dir)
     except Exception:
-        if not project_existed:
+        if project_existed:
+            _remove_new_paths(project_dir, existing_paths)
+        else:
             shutil.rmtree(project_dir, ignore_errors=True)
         raise

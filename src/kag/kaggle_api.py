@@ -301,16 +301,21 @@ def download_competition(
         except FileNotFoundError:
             return DownloadResult(False, "kaggle CLI not found")
 
-        while True:
-            try:
-                returncode = process.wait(timeout=DOWNLOAD_POLL_SECONDS)
-                break
-            except subprocess.TimeoutExpired:
-                if cancel is not None and cancel.is_set():
-                    _stop_process(process)
-                    return DownloadResult(False, DOWNLOAD_CANCELLED, cancelled=True)
-                if progress is not None:
-                    progress(_directory_size(target))
+        try:
+            while True:
+                try:
+                    returncode = process.wait(timeout=DOWNLOAD_POLL_SECONDS)
+                    break
+                except subprocess.TimeoutExpired:
+                    if cancel is not None and cancel.is_set():
+                        _stop_process(process)
+                        return DownloadResult(False, DOWNLOAD_CANCELLED, cancelled=True)
+                    if progress is not None:
+                        progress(_directory_size(target))
+        except BaseException:
+            if process.poll() is None:
+                _stop_process(process)
+            raise
 
         stdout_file.seek(0)
         stderr_file.seek(0)

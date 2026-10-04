@@ -172,6 +172,9 @@ class FakeDownloadProcess:
             raise subprocess.TimeoutExpired(cmd=self.cmd, timeout=timeout or 0)
         return self.returncode
 
+    def poll(self) -> int | None:
+        return None if self.waits_before_exit > 0 else self.returncode
+
     def terminate(self) -> None:
         self.terminated = True
         self.waits_before_exit = 0
@@ -295,6 +298,22 @@ def test_download_competition_does_not_start_when_already_cancelled(
 
     assert result.cancelled is True
     assert fake_cli.processes == []
+
+
+def test_download_competition_stops_process_when_progress_callback_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_cli = FakeDownloadCli(files={"partial.zip": b"x"}, waits_before_exit=100)
+    monkeypatch.setattr(kaggle_api.subprocess, "Popen", fake_cli)
+
+    def broken_progress(size: int) -> None:
+        raise RuntimeError("app is shutting down")
+
+    with pytest.raises(RuntimeError, match="shutting down"):
+        kaggle_api.download_competition("orphan", str(tmp_path), progress=broken_progress)
+
+    assert fake_cli.processes[0].terminated is True
 
 
 def test_conftest_blocks_real_kaggle_popen(tmp_path: Path) -> None:

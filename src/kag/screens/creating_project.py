@@ -86,7 +86,13 @@ class CreatingProjectScreen(Screen):
             return
 
     def _report(self, message: str) -> None:
-        self.app.call_from_thread(self._set_status, message)
+        try:
+            self.app.call_from_thread(self._set_status, message)
+        except Exception:
+            return
+
+    def on_unmount(self) -> None:
+        self._cancel.set()
 
     @work(thread=True, exclusive=True)
     def _create(self) -> None:
@@ -109,7 +115,10 @@ class CreatingProjectScreen(Screen):
                 self.competition,
                 error=f"Project creation failed: {exc or type(exc).__name__}",
             )
-        self.app.call_from_thread(self.dismiss, result)
+        try:
+            self.app.call_from_thread(self.dismiss, result)
+        except Exception:
+            return
 
     def action_cancel(self) -> None:
         if self._cancel.is_set():
