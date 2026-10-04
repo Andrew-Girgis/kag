@@ -31,32 +31,87 @@ Options:
   --help, -h        Show this help message."""
 
 
-def _kaggle_auth_status() -> tuple[bool, str]:
-    kaggle_json = Path.home() / ".kaggle" / "kaggle.json"
-    api_token = os.environ.get("KAGGLE_API_TOKEN")
-    username = os.environ.get("KAGGLE_USERNAME")
-    key = os.environ.get("KAGGLE_KEY")
+KAGGLE_LOGIN_HINT = "run `kaggle auth login` or set KAGGLE_API_TOKEN"
 
-    if api_token:
+
+def _kaggle_config_dir() -> Path:
+    config_dir = os.environ.get("KAGGLE_CONFIG_DIR")
+    if config_dir:
+        return Path(config_dir).expanduser()
+    default_dir = Path.home() / ".kaggle"
+    if sys.platform.startswith("linux") and not default_dir.exists():
+        xdg_config = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+        return Path(xdg_config) / "kaggle"
+    return default_dir
+
+
+def _has_text(path: Path) -> bool:
+    try:
+        return bool(path.read_text().strip())
+    except OSError:
+        return False
+
+
+def _read_kaggle_json(path: Path) -> tuple[dict[str, object], str | None]:
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}, f"{path} is empty or not valid JSON"
+    if not isinstance(data, dict):
+        return {}, f"{path} is not a JSON object"
+    return data, None
+
+
+def _kaggle_auth_status() -> tuple[bool, str]:
+    kaggle_home = Path.home() / ".kaggle"
+
+    if os.environ.get("KAGGLE_API_TOKEN"):
         return True, "KAGGLE_API_TOKEN"
-    if username and key:
-        return True, "KAGGLE_USERNAME + KAGGLE_KEY"
+    for token_name in ("access_token", "access_token.txt"):
+        token_path = kaggle_home / token_name
+        if _has_text(token_path):
+            return True, str(token_path)
+
+    problems: list[str] = []
+    file_values: dict[str, object] = {}
+    kaggle_json = _kaggle_config_dir() / "kaggle.json"
     if kaggle_json.exists():
-        return True, f"{kaggle_json} (legacy)"
-    return False, "missing (set KAGGLE_API_TOKEN or KAGGLE_USERNAME/KAGGLE_KEY)"
+        file_values, problem = _read_kaggle_json(kaggle_json)
+        if problem:
+            problems.append(problem)
+
+    env_username = os.environ.get("KAGGLE_USERNAME")
+    env_key = os.environ.get("KAGGLE_KEY")
+    if (env_username or file_values.get("username")) and (env_key or file_values.get("key")):
+        if env_username and env_key:
+            return True, "KAGGLE_USERNAME + KAGGLE_KEY"
+        if not env_username and not env_key:
+            return True, f"{kaggle_json} (legacy)"
+        env_name = "KAGGLE_USERNAME" if env_username else "KAGGLE_KEY"
+        return True, f"{kaggle_json} + {env_name} (legacy)"
+    if kaggle_json.exists() and not problems:
+        problems.append(f"{kaggle_json} is missing username or key")
+
+    oauth_credentials = kaggle_home / "credentials.json"
+    if _has_text(oauth_credentials):
+        return True, f"{oauth_credentials} (kaggle auth login)"
+
+    problems.append(f"no credentials found; {KAGGLE_LOGIN_HINT}")
+    return False, "; ".join(problems)
+
+
+def _first_output_line(*outputs: str | None) -> str:
+    for output in outputs:
+        text = (output or "").strip()
+        if text:
+            return text.splitlines()[0]
+    return ""
 
 
 def check_kaggle_cli() -> str | None:
     kaggle_path = shutil.which("kaggle")
     if not kaggle_path:
         return "kaggle CLI not found. Install with: pip install kaggle"
-    auth_ok, auth_details = _kaggle_auth_status()
-    if not auth_ok:
-        return (
-            "kaggle credentials not found.\n"
-            "Set KAGGLE_API_TOKEN (preferred) or KAGGLE_USERNAME/KAGGLE_KEY, "
-            "or use legacy ~/.kaggle/kaggle.json."
-        )
     return None
 
 
@@ -151,8 +206,14 @@ def doctor_command(json_output: bool = False) -> int:
                 auth_runtime_ok = True
                 auth_runtime_details = "validated via `kaggle competitions list --page-size 1`"
             else:
-                stderr = (auth_probe.stderr or "").strip()
-                auth_runtime_details = stderr.splitlines()[0] if stderr else "command failed"
+                auth_runtime_details = (
+                    _first_output_line(auth_probe.stderr, auth_probe.stdout) or "command failed"
+                )
+                if any(
+                    marker in auth_runtime_details.lower()
+                    for marker in ("authenticat", "unauthorized", "401")
+                ):
+                    auth_runtime_details += f" ({KAGGLE_LOGIN_HINT})"
         except subprocess.TimeoutExpired:
             auth_runtime_details = "timeout running auth probe"
         except Exception as exc:
