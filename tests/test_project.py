@@ -332,6 +332,7 @@ def _data_loading_source(files: list[str]) -> str:
         ["test.csv", "sample_submission.csv"],
         ["2024-train.csv", "class.csv", "pd.csv", "my file (v2).csv"],
         ["train/labels.csv", "test/labels.csv", "train.csv.zip"],
+        ["a².csv", "x½y.csv", "٣data.csv", "ﬁle.csv", "日本.csv"],
         ["images.zip", "metadata.json"],
         [],
     ],
@@ -367,6 +368,16 @@ def test_make_starter_notebook_generates_unique_safe_variable_names() -> None:
     assert 'df_pd = pd.read_csv(data_path + "pd.csv")' in source
     assert 'labels = pd.read_csv(data_path + "train/labels.csv")' in source
     assert 'labels_2 = pd.read_csv(data_path + "test/labels.csv")' in source
+
+
+def test_make_starter_notebook_normalizes_unicode_variable_names() -> None:
+    source = _data_loading_source(["a².csv", "x½y.csv", "٣data.csv", "ﬁle.csv", "file.csv"])
+
+    assert 'a2 = pd.read_csv(data_path + "a².csv")' in source
+    assert 'x1_2y = pd.read_csv(data_path + "x½y.csv")' in source
+    assert 'df_٣data = pd.read_csv(data_path + "٣data.csv")' in source
+    assert 'file = pd.read_csv(data_path + "ﬁle.csv")' in source
+    assert 'file_2 = pd.read_csv(data_path + "file.csv")' in source
 
 
 def test_make_starter_notebook_strips_zip_suffix_from_csv_archives() -> None:

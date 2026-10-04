@@ -4,6 +4,7 @@ import re
 import shutil
 import subprocess
 import sys
+import unicodedata
 import zipfile
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
@@ -39,8 +40,10 @@ RESERVED_NOTEBOOK_NAMES = {"pd", "np", "plt", "sns", "data_path", "train_test_sp
 
 def _csv_variable_name(file_name: str, used: set[str]) -> str:
     stem = PurePosixPath(file_name).name.removesuffix(".csv")
-    base = re.sub(r"\W+", "_", stem).strip("_").lower() or "df"
-    if base[0].isdigit() or keyword.iskeyword(base) or base in RESERVED_NOTEBOOK_NAMES:
+    normalized = unicodedata.normalize("NFKC", stem).lower()
+    cleaned = "".join(char if f"_{char}".isidentifier() else "_" for char in normalized)
+    base = re.sub(r"_+", "_", cleaned).strip("_") or "df"
+    if not base.isidentifier() or keyword.iskeyword(base) or base in RESERVED_NOTEBOOK_NAMES:
         base = f"df_{base}"
     name = base
     suffix = 2
@@ -68,7 +71,9 @@ def _data_loading_source(files: list[str]) -> str:
     for csv_file in csv_files[:MAX_NOTEBOOK_CSV_LOADS]:
         variable = _csv_variable_name(csv_file, used)
         variables.append(variable)
-        lines.append(f"{variable} = pd.read_csv(data_path + {json.dumps(csv_file)})")
+        lines.append(
+            f"{variable} = pd.read_csv(data_path + {json.dumps(csv_file, ensure_ascii=False)})"
+        )
 
     remaining = len(csv_files) - MAX_NOTEBOOK_CSV_LOADS
     if remaining > 0:
