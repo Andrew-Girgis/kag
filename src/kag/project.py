@@ -251,6 +251,7 @@ def _extract_zip_safely(zip_path: Path, destination: Path) -> list[str]:
     warnings: list[str] = []
     destination.mkdir(parents=True, exist_ok=True)
 
+    kept_existing: list[str] = []
     with zipfile.ZipFile(zip_path, "r") as archive:
         for member in archive.infolist():
             target = _safe_zip_target(member.filename, destination)
@@ -265,9 +266,19 @@ def _extract_zip_safely(zip_path: Path, destination: Path) -> list[str]:
                 continue
 
             target.parent.mkdir(parents=True, exist_ok=True)
-            with archive.open(member, "r") as source, target.open("wb") as output:
+            try:
+                output = target.open("xb")
+            except FileExistsError:
+                kept_existing.append(member.filename)
+                continue
+            with archive.open(member, "r") as source, output:
                 shutil.copyfileobj(source, output)
 
+    if kept_existing:
+        warnings.append(
+            f"Kept {len(kept_existing)} existing file(s) instead of overwriting them from "
+            f"`{zip_path.name}` (e.g. `{kept_existing[0]}`). Delete a file to extract it again."
+        )
     return warnings
 
 
@@ -288,6 +299,23 @@ def _download_failure_message(slug: str, details: str) -> str:
     return message
 
 
+def existing_project_dir(config: Config, slug: str) -> Path | None:
+    project_dir = config.kag_path / slug
+    try:
+        if project_dir.is_dir() and any(project_dir.iterdir()):
+            return project_dir
+    except OSError:
+        return None
+    return None
+
+
+def _write_if_missing(path: Path, content: str) -> bool:
+    if path.exists():
+        return False
+    path.write_text(content)
+    return True
+
+
 def create_project(
     competition: Competition,
     config: Config,
@@ -296,6 +324,7 @@ def create_project(
 ) -> str | None:
     project_dir = config.kag_path / competition.slug
     project_existed = project_dir.exists()
+    project_had_content = existing_project_dir(config, competition.slug) is not None
     project_dir.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -342,8 +371,7 @@ def create_project(
 
         notebook = make_starter_notebook(competition.slug, notebook_description, files)
         notebook_path = project_dir / f"{competition.slug}.ipynb"
-        with open(notebook_path, "w") as f:
-            json.dump(notebook, f, indent=1)
+        _write_if_missing(notebook_path, json.dumps(notebook, indent=1))
 
         notes = make_notes_md(
             competition=competition,
@@ -352,10 +380,9 @@ def create_project(
             warnings=extract_warnings,
             access_note=access_note,
         )
-        notes_path = project_dir / "notes.md"
-        notes_path.write_text(notes)
+        _write_if_missing(project_dir / "notes.md", notes)
 
-        if config.auto_git:
+        if config.auto_git and not project_had_content:
             try:
                 subprocess.run(
                     ["git", "init"], cwd=str(project_dir), capture_output=True, timeout=10
@@ -377,7 +404,7 @@ def create_project(
             except Exception:
                 pass
 
-        if config.auto_venv:
+        if config.auto_venv and not (project_dir / ".venv").exists():
             try:
                 subprocess.run(
                     [sys.executable, "-m", "venv", ".venv"],
