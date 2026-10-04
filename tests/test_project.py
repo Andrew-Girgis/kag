@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -477,3 +478,122 @@ def test_create_project_gitignores_editor_logs(
     assert project_path is not None
     gitignore_lines = (Path(project_path) / ".gitignore").read_text().splitlines()
     assert ".kag/logs/" in gitignore_lines
+
+
+def _stub_project_sources(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    commands: list[list[str]] = []
+
+    def record_run(cmd: list[str], *args: object, **kwargs: object) -> object:
+        commands.append(list(cmd))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(project, "get_competition_files", lambda slug: ["train.csv"])
+    monkeypatch.setattr(project, "fetch_competition_markdown_sections", lambda slug: ({}, []))
+    monkeypatch.setattr(project.subprocess, "run", record_run)
+    return commands
+
+
+def _existing_competition() -> Competition:
+    return Competition(slug="titanic", title="Titanic", deadline="", reward="", team_count="0")
+
+
+def test_existing_project_dir_detects_only_non_empty_folders(tmp_path: Path) -> None:
+    config = Config(kag_path=tmp_path)
+
+    assert project.existing_project_dir(config, "missing") is None
+    (tmp_path / "empty").mkdir()
+    assert project.existing_project_dir(config, "empty") is None
+    (tmp_path / "used").mkdir()
+    (tmp_path / "used" / "notes.md").write_text("mine")
+    assert project.existing_project_dir(config, "used") == tmp_path / "used"
+
+
+def test_create_project_never_overwrites_existing_notebook_or_notes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands = _stub_project_sources(monkeypatch)
+    project_dir = tmp_path / "titanic"
+    project_dir.mkdir()
+    (project_dir / "titanic.ipynb").write_text("MY NOTEBOOK")
+    (project_dir / "notes.md").write_text("MY NOTES")
+    (project_dir / ".git").mkdir()
+
+    project.create_project(
+        _existing_competition(),
+        Config(kag_path=tmp_path, auto_git=True, auto_venv=False),
+        download_files=False,
+    )
+
+    assert (project_dir / "titanic.ipynb").read_text() == "MY NOTEBOOK"
+    assert (project_dir / "notes.md").read_text() == "MY NOTES"
+    assert not any(cmd[0] == "git" for cmd in commands)
+
+
+def test_create_project_fills_missing_files_in_existing_project(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_project_sources(monkeypatch)
+    project_dir = tmp_path / "titanic"
+    project_dir.mkdir()
+    (project_dir / "titanic.ipynb").write_text("MY NOTEBOOK")
+
+    project.create_project(
+        _existing_competition(),
+        Config(kag_path=tmp_path, auto_git=False, auto_venv=False),
+        download_files=False,
+    )
+
+    assert (project_dir / "titanic.ipynb").read_text() == "MY NOTEBOOK"
+    assert (project_dir / "notes.md").read_text().startswith("# Titanic")
+
+
+def test_create_project_skips_git_setup_for_existing_non_git_folder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands = _stub_project_sources(monkeypatch)
+    project_dir = tmp_path / "titanic"
+    project_dir.mkdir()
+    (project_dir / "experiment.py").write_text("print('mine')")
+
+    project.create_project(
+        _existing_competition(),
+        Config(kag_path=tmp_path, auto_git=True, auto_venv=False),
+        download_files=False,
+    )
+
+    assert not any(cmd[0] == "git" for cmd in commands)
+    assert not (project_dir / ".gitignore").exists()
+
+
+def test_create_project_skips_venv_when_one_exists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands = _stub_project_sources(monkeypatch)
+    (tmp_path / "titanic" / ".venv").mkdir(parents=True)
+
+    project.create_project(
+        _existing_competition(),
+        Config(kag_path=tmp_path, auto_git=False, auto_venv=True),
+        download_files=False,
+    )
+
+    assert not any("venv" in cmd for cmd in commands)
+
+
+def test_create_project_still_sets_up_git_for_new_projects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands = _stub_project_sources(monkeypatch)
+
+    project.create_project(
+        _existing_competition(),
+        Config(kag_path=tmp_path, auto_git=True, auto_venv=False),
+        download_files=False,
+    )
+
+    assert ["git", "init"] in commands

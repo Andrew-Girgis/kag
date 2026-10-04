@@ -5,12 +5,13 @@ from textual.widgets import Header, Footer
 
 from . import __version__
 from .config import Config
-from .kaggle_api import check_competition_access
+from .kaggle_api import Competition, check_competition_access
 from .screens.access_required import AccessRequiredScreen
 from .screens.competition_list import CompetitionListScreen
 from .screens.editor_select import EditorSelectScreen
+from .screens.existing_project import ExistingProjectScreen
 from .screens.confirm_download import ConfirmDownloadScreen
-from .project import ProjectCreationError, create_project
+from .project import ProjectCreationError, create_project, existing_project_dir
 from .update_check import UpdateNotice, check_for_update
 
 
@@ -50,6 +51,21 @@ class KagApp(App):
     }
     #confirm-dialog {
         padding: 1 2;
+    }
+    #existing-dialog {
+        padding: 1 2;
+    }
+    #existing-title {
+        text-style: bold;
+    }
+    #existing-path {
+        color: $text-muted;
+    }
+    #existing-summary, #existing-guidance {
+        padding: 1 0 0 0;
+    }
+    #existing-options {
+        margin: 1 0 0 0;
     }
     #editor-title {
         text-style: bold;
@@ -106,10 +122,29 @@ class KagApp(App):
             self.result = result.project_path
             self.exit()
             return
-        if not result.competition.is_joined:
+        existing_dir = existing_project_dir(self.config, result.competition.slug)
+        if existing_dir is not None:
+            self.push_screen(
+                ExistingProjectScreen(result.competition, existing_dir),
+                self._on_existing_project_chosen,
+            )
+            return
+        self._start_project_flow(result.competition)
+
+    def _on_existing_project_chosen(self, result: ExistingProjectScreen.Chosen | None) -> None:
+        if result is None:
+            return
+        if result.open_existing:
+            self.result = result.project_path
+            self.exit()
+            return
+        self._start_project_flow(result.competition)
+
+    def _start_project_flow(self, competition: Competition) -> None:
+        if not competition.is_joined:
             self.push_screen(
                 AccessRequiredScreen(
-                    result.competition,
+                    competition,
                     "Please join this competition and accept its rules before downloading data.",
                 ),
                 self._on_access_resolved,
@@ -117,7 +152,7 @@ class KagApp(App):
             return
 
         self.push_screen(
-            ConfirmDownloadScreen(result.competition),
+            ConfirmDownloadScreen(competition),
             self._on_download_confirmed,
         )
 
