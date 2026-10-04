@@ -19,7 +19,7 @@ from .kaggle_api import (
     get_competition_files,
     list_competition_files,
 )
-from . import kaggle_sdk
+from . import context, kaggle_sdk
 from .kaggle_sdk import CompetitionDetails
 from .notes_fetcher import fetch_competition_markdown_sections
 
@@ -389,8 +389,28 @@ def fetch_competition_details(slug: str) -> CompetitionDetails | None:
 def _write_if_missing(path: Path, content: str) -> bool:
     if path.exists():
         return False
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
     return True
+
+
+def _write_agent_context(
+    project_dir: Path,
+    competition: Competition,
+    details: CompetitionDetails | None,
+    listed_files: list[str],
+    notebook_name: str,
+) -> None:
+    data_profile = context.profile_data(project_dir / "data", listed_files)
+    manifest = context.build_manifest(competition, details, data_profile, notebook_name)
+    title = details.title if details else competition.title
+    _write_if_missing(project_dir / context.MANIFEST_PATH, context.manifest_json(manifest))
+    if data_profile.downloaded:
+        _write_if_missing(
+            project_dir / context.SCHEMA_PATH, context.render_schema_md(title, data_profile)
+        )
+    _write_if_missing(project_dir / "AGENTS.md", context.render_agents_md(manifest))
+    _write_if_missing(project_dir / "CLAUDE.md", "@AGENTS.md\n")
 
 
 def create_project(
@@ -494,6 +514,10 @@ def create_project(
         _write_if_missing(project_dir / "notes.md", notes)
 
         check_cancel()
+        report("Writing agent context files...")
+        _write_agent_context(project_dir, competition, details, files, notebook_path.name)
+
+        check_cancel()
         if config.auto_git and not project_had_content:
             report("Setting up git...")
             try:
@@ -502,7 +526,7 @@ def create_project(
                 )
                 gitignore = project_dir / ".gitignore"
                 gitignore.write_text(
-                    ".venv/\n__pycache__/\n*.pyc\n.ipynb_checkpoints/\ndata/\n"
+                    ".venv/\n__pycache__/\n*.pyc\n.ipynb_checkpoints/\ndata/*\n!data/SCHEMA.md\n"
                     f"{EDITOR_LOG_DIR.as_posix()}/\n"
                 )
                 subprocess.run(
