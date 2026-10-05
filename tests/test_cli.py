@@ -452,6 +452,8 @@ def recorded(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[object]]:
         (["search", "new"], "new"),
         (["search", "login"], "login"),
         (["search"], ""),
+        (["search", "--", "-x", "files"], "-x files"),
+        (["search", "titanic", "--", "--json"], "titanic --json"),
     ],
 )
 def test_search_and_bare_queries_open_the_picker(
@@ -491,6 +493,7 @@ def test_init_command_and_alias(argv: list[str], capsys: pytest.CaptureFixture[s
         (["titanic", "--json"], "unknown option: --json"),
         (["doctor", "--verbose"], "unknown doctor option: --verbose"),
         (["init", "extra"], "init takes no arguments: extra"),
+        (["search", "titanic", "--json"], "unknown search option: --json"),
     ],
 )
 def test_unknown_options_are_usage_errors(

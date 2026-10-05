@@ -32,7 +32,8 @@ SEARCH_HELP_TEXT = """Usage:
   kag search <query>
 
 Open the competition picker with <query> typed into the search box.
-`kag <query>` does the same unless the first word is a command name."""
+`kag <query>` does the same unless the first word is a command name.
+Use `kag search -- <query>` to search for text that starts with "-"."""
 
 DOCTOR_HELP_TEXT = """Usage:
   kag doctor [--json]
@@ -409,9 +410,18 @@ def run_command(args: list[str]) -> int:
             return _usage_error(f"unknown doctor option: {unknown[0]}")
         return doctor_command(json_output="--json" in rest)
     if command == "search":
-        if _command_help(rest, SEARCH_HELP_TEXT):
+        words = rest
+        if "--" in rest:
+            separator = rest.index("--")
+            words, literal = rest[:separator], rest[separator + 1 :]
+        else:
+            literal = []
+        if _command_help(words, SEARCH_HELP_TEXT):
             return 0
-        return run_tui(" ".join(rest).strip())
+        option = next((arg for arg in words if arg.startswith("-")), None)
+        if option is not None:
+            return _usage_error(f"unknown search option: {option}")
+        return run_tui(" ".join([*words, *literal]).strip())
 
     if any(arg in HELP_FLAGS for arg in args):
         print(HELP_TEXT)
