@@ -60,6 +60,15 @@ def _string_list(value: object) -> list[str]:
     return [item for item in value if isinstance(item, str)]
 
 
+def _default_groups(data: dict, groups: dict) -> list[str]:
+    tool = data.get("tool")
+    uv = tool.get("uv") if isinstance(tool, dict) else None
+    selected = uv.get("default-groups", ["dev"]) if isinstance(uv, dict) else ["dev"]
+    if selected == "all":
+        return list(groups)
+    return _string_list(selected) if isinstance(selected, list) else ["dev"]
+
+
 def planned_packages(project_dir: Path, config: Config) -> list[str] | None:
     path = project_dir / PYPROJECT_NAME
     if not path.exists():
@@ -72,8 +81,8 @@ def planned_packages(project_dir: Path, config: Config) -> list[str] | None:
     packages = _string_list(project.get("dependencies") if isinstance(project, dict) else None)
     groups = data.get("dependency-groups")
     if isinstance(groups, dict):
-        for group in groups.values():
-            packages.extend(_string_list(group))
+        for name in _default_groups(data, groups):
+            packages.extend(_string_list(groups.get(name)))
     build = data.get("build-system")
     if isinstance(build, dict):
         packages.extend(_string_list(build.get("requires")))
@@ -127,7 +136,9 @@ def _fallback_python(python: str) -> str:
     return shutil.which(f"python{python}") or f"python{python}"
 
 
-def install_commands(environment: EnvironmentConfig) -> list[list[str]]:
+def install_commands(
+    environment: EnvironmentConfig, packages: list[str] | None = None
+) -> list[list[str]]:
     if environment.command:
         return [list(environment.command)]
     uv = shutil.which("uv")
@@ -137,10 +148,11 @@ def install_commands(environment: EnvironmentConfig) -> list[list[str]]:
             command += ["--python", environment.python]
         return [command]
     bin_dir = "Scripts" if os.name == "nt" else "bin"
+    packages = environment.packages if packages is None else packages
     commands = [[_fallback_python(environment.python), "-m", "venv", VENV_NAME]]
-    if environment.packages:
+    if packages:
         venv_python = str(Path(VENV_NAME) / bin_dir / "python")
-        commands.append([venv_python, "-m", "pip", "install", *environment.packages])
+        commands.append([venv_python, "-m", "pip", "install", *packages])
     return commands
 
 
@@ -214,15 +226,22 @@ def setup_environment(
 ) -> EnvironmentResult:
     if not config.auto_venv:
         return EnvironmentResult(status="disabled")
-    commands = install_commands(config.environment)
+    packages = planned_packages(project_dir, config)
+    commands = install_commands(config.environment, packages or [])
     base = {
-        "packages": planned_packages(project_dir, config) or [],
+        "packages": packages or [],
         "install_command": describe(commands),
     }
     if not _should_run(config, project_dir):
         return EnvironmentResult(status="exists", **base)
     if not install:
         return EnvironmentResult(status="not_installed", **base)
+    if packages is None and not config.environment.command and not shutil.which("uv"):
+        return EnvironmentResult(
+            status="failed",
+            message=f"couldn't read {PYPROJECT_NAME} to list its packages for pip",
+            **base,
+        )
     venv_existed = (project_dir / VENV_NAME).exists()
 
     log_path = project_dir / LOG_PATH

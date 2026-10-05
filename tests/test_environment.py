@@ -278,6 +278,28 @@ def test_existing_pyproject_packages_are_what_gets_reported(tmp_path: Path, pope
         "pytest",
         "hatchling",
     ]
+    (project_dir / "pyproject.toml").write_text(
+        '[project]\nname = "p"\ndependencies = ["torch"]\n'
+        '[dependency-groups]\ndev = ["pytest"]\ndocs = ["mkdocs"]\nlint = ["ruff"]\n'
+    )
+    assert environment.planned_packages(project_dir, config) == ["torch", "pytest"]
+    (project_dir / "pyproject.toml").write_text(
+        '[project]\nname = "p"\ndependencies = ["torch"]\n'
+        '[dependency-groups]\ndev = ["pytest"]\ndocs = ["mkdocs"]\n'
+        '[tool.uv]\ndefault-groups = ["docs"]\n'
+    )
+    assert environment.planned_packages(project_dir, config) == ["torch", "mkdocs"]
+    (project_dir / "pyproject.toml").write_text(
+        '[project]\nname = "p"\ndependencies = []\n'
+        '[dependency-groups]\ndev = ["pytest"]\ndocs = ["mkdocs"]\n'
+        '[tool.uv]\ndefault-groups = "all"\n'
+    )
+    assert environment.planned_packages(project_dir, config) == ["pytest", "mkdocs"]
+    (project_dir / "pyproject.toml").write_text(
+        '[project]\nname = "p"\ndependencies = ["torch", "pandas"]\n'
+        '[dependency-groups]\ndev = ["pytest", "pandas"]\n'
+        '[build-system]\nrequires = ["hatchling"]\n'
+    )
     result = _setup(project_dir, config, install=False)
     assert result.packages == ["torch", "pandas", "pytest", "hatchling"]
 
@@ -488,3 +510,32 @@ def test_kag_new_warns_when_install_fails(
 
     assert result["environment"]["status"] == "failed"
     assert any("Couldn't set up the Python environment" in w for w in result["warnings"])
+
+
+def test_pip_fallback_installs_the_existing_pyprojects_packages(
+    tmp_path: Path, popen: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(environment.shutil, "which", lambda cmd: None)
+    project_dir = tmp_path / "p"
+    project_dir.mkdir()
+    (project_dir / "pyproject.toml").write_text('[project]\nname = "p"\ndependencies = ["torch"]\n')
+
+    result = _setup(project_dir, Config(kag_path=tmp_path), install=True)
+
+    assert result.packages == ["torch"]
+    assert popen["calls"][1]["cmd"][-4:] == ["-m", "pip", "install", "torch"]
+    assert result.install_command.endswith("pip install torch")
+
+
+def test_pip_fallback_refuses_an_unreadable_pyproject(
+    tmp_path: Path, popen: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(environment.shutil, "which", lambda cmd: None)
+    project_dir = tmp_path / "p"
+    project_dir.mkdir()
+    (project_dir / "pyproject.toml").write_text("not = [valid")
+
+    result = _setup(project_dir, Config(kag_path=tmp_path), install=True)
+
+    assert result.status == "failed"
+    assert popen["calls"] == []
