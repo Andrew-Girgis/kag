@@ -5,8 +5,10 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
+import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -40,12 +42,42 @@ class EnvironmentResult:
         return payload
 
 
+def _should_run(config: Config, project_dir: Path) -> bool:
+    return bool(config.environment.command) or not (project_dir / VENV_NAME).exists()
+
+
 def needs_prompt(config: Config, project_dir: Path) -> bool:
     return (
         config.auto_venv
         and config.environment.install == "ask"
-        and not (project_dir / VENV_NAME).exists()
+        and _should_run(config, project_dir)
     )
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+def planned_packages(project_dir: Path, config: Config) -> list[str] | None:
+    path = project_dir / PYPROJECT_NAME
+    if not path.exists():
+        return list(config.environment.packages)
+    try:
+        data = tomllib.loads(path.read_text())
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return None
+    project = data.get("project")
+    packages = _string_list(project.get("dependencies") if isinstance(project, dict) else None)
+    groups = data.get("dependency-groups")
+    if isinstance(groups, dict):
+        for group in groups.values():
+            packages.extend(_string_list(group))
+    build = data.get("build-system")
+    if isinstance(build, dict):
+        packages.extend(_string_list(build.get("requires")))
+    return list(dict.fromkeys(packages))
 
 
 def wants_install(config: Config, install: bool | None) -> bool:
@@ -90,11 +122,9 @@ def write_pyproject(project_dir: Path, slug: str, config: Config) -> bool:
 
 
 def _fallback_python(python: str) -> str:
-    if python:
-        found = shutil.which(f"python{python}")
-        if found:
-            return found
-    return sys.executable
+    if not python:
+        return sys.executable
+    return shutil.which(f"python{python}") or f"python{python}"
 
 
 def install_commands(environment: EnvironmentConfig) -> list[list[str]]:
@@ -147,13 +177,32 @@ def _run(
         try:
             check_cancel()
         except BaseException:
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
+            _stop(process)
             raise
+
+
+def _signal(process: subprocess.Popen, sig: int) -> None:
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, sig)
+            return
+        except ProcessLookupError:
+            return
+        except OSError:
+            pass
+    if sig == signal.SIGTERM:
+        process.terminate()
+    else:
+        process.kill()
+
+
+def _stop(process: subprocess.Popen) -> None:
+    _signal(process, signal.SIGTERM)
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        _signal(process, getattr(signal, "SIGKILL", signal.SIGTERM))
+        process.wait()
 
 
 def setup_environment(
@@ -167,13 +216,14 @@ def setup_environment(
         return EnvironmentResult(status="disabled")
     commands = install_commands(config.environment)
     base = {
-        "packages": list(config.environment.packages),
+        "packages": planned_packages(project_dir, config) or [],
         "install_command": describe(commands),
     }
-    if (project_dir / VENV_NAME).exists():
+    if not _should_run(config, project_dir):
         return EnvironmentResult(status="exists", **base)
     if not install:
         return EnvironmentResult(status="not_installed", **base)
+    venv_existed = (project_dir / VENV_NAME).exists()
 
     log_path = project_dir / LOG_PATH
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -189,7 +239,8 @@ def setup_environment(
             else:
                 message = f"{_display(command)} exited with code {code}"
             if code != 0:
-                shutil.rmtree(project_dir / VENV_NAME, ignore_errors=True)
+                if not venv_existed:
+                    shutil.rmtree(project_dir / VENV_NAME, ignore_errors=True)
                 return EnvironmentResult(status="failed", log=log, message=message, **base)
     return EnvironmentResult(status="installed", log=log, **base)
 
