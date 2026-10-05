@@ -549,6 +549,17 @@ def create_project(
         _write_agent_context(project_dir, competition, details, files, notebook_path.name, cancel)
 
         check_cancel()
+        environment_result = environment.setup_environment(
+            project_dir,
+            config,
+            environment.wants_install(config, install_environment),
+            check_cancel,
+            report,
+        )
+        if on_environment is not None:
+            on_environment(environment_result)
+
+        check_cancel()
         if config.auto_git and not project_had_content:
             report("Setting up git...")
             try:
@@ -571,17 +582,6 @@ def create_project(
                 )
             except Exception:
                 pass
-
-        check_cancel()
-        environment_result = environment.setup_environment(
-            project_dir,
-            config,
-            environment.wants_install(config, install_environment),
-            check_cancel,
-            report,
-        )
-        if on_environment is not None:
-            on_environment(environment_result)
 
         check_cancel()
         if editor and shutil.which(editor):

@@ -69,6 +69,20 @@ def _default_groups(data: dict, groups: dict) -> list[str]:
     return _string_list(selected) if isinstance(selected, list) else ["dev"]
 
 
+def _group_packages(groups: dict, name: str, seen: set[str]) -> list[str]:
+    if name in seen:
+        return []
+    seen.add(name)
+    entries = groups.get(name)
+    packages: list[str] = []
+    for entry in entries if isinstance(entries, list) else []:
+        if isinstance(entry, str):
+            packages.append(entry)
+        elif isinstance(entry, dict) and isinstance(entry.get("include-group"), str):
+            packages.extend(_group_packages(groups, entry["include-group"], seen))
+    return packages
+
+
 def planned_packages(project_dir: Path, config: Config) -> list[str] | None:
     path = project_dir / PYPROJECT_NAME
     if not path.exists():
@@ -82,7 +96,7 @@ def planned_packages(project_dir: Path, config: Config) -> list[str] | None:
     groups = data.get("dependency-groups")
     if isinstance(groups, dict):
         for name in _default_groups(data, groups):
-            packages.extend(_string_list(groups.get(name)))
+            packages.extend(_group_packages(groups, name, set()))
     build = data.get("build-system")
     if isinstance(build, dict):
         packages.extend(_string_list(build.get("requires")))
@@ -117,6 +131,9 @@ def render_pyproject(slug: str, environment: EnvironmentConfig) -> str:
         "\n"
         "[tool.uv]\n"
         "package = false\n"
+        "\n"
+        "[tool.uv.workspace]\n"
+        "members = []\n"
     )
 
 
