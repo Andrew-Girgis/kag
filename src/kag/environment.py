@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import Config, EnvironmentConfig
+from .context import content_hash, generated_hashes
 
 PYPROJECT_NAME = "pyproject.toml"
 VENV_NAME = ".venv"
@@ -43,7 +44,9 @@ class EnvironmentResult:
 
 
 def _should_run(config: Config, project_dir: Path) -> bool:
-    return bool(config.environment.command) or not (project_dir / VENV_NAME).exists()
+    if config.environment.command:
+        return True
+    return not (project_dir / VENV_NAME).exists() and owns_pyproject(project_dir)
 
 
 def needs_prompt(config: Config, project_dir: Path) -> bool:
@@ -54,53 +57,30 @@ def needs_prompt(config: Config, project_dir: Path) -> bool:
     )
 
 
-def _string_list(value: object) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [item for item in value if isinstance(item, str)]
+def owns_pyproject(project_dir: Path) -> bool:
+    path = project_dir / PYPROJECT_NAME
+    if not path.exists():
+        return True
+    try:
+        current = content_hash(path.read_text())
+    except (OSError, UnicodeDecodeError):
+        return False
+    return generated_hashes(project_dir).get(PYPROJECT_NAME) == current
 
 
-def _default_groups(data: dict, groups: dict) -> list[str]:
-    tool = data.get("tool")
-    uv = tool.get("uv") if isinstance(tool, dict) else None
-    selected = uv.get("default-groups", ["dev"]) if isinstance(uv, dict) else ["dev"]
-    if selected == "all":
-        return list(groups)
-    return _string_list(selected) if isinstance(selected, list) else ["dev"]
-
-
-def _group_packages(groups: dict, name: str, seen: set[str]) -> list[str]:
-    if name in seen:
-        return []
-    seen.add(name)
-    entries = groups.get(name)
-    packages: list[str] = []
-    for entry in entries if isinstance(entries, list) else []:
-        if isinstance(entry, str):
-            packages.append(entry)
-        elif isinstance(entry, dict) and isinstance(entry.get("include-group"), str):
-            packages.extend(_group_packages(groups, entry["include-group"], seen))
-    return packages
-
-
-def planned_packages(project_dir: Path, config: Config) -> list[str] | None:
+def planned_packages(project_dir: Path, config: Config) -> list[str]:
     path = project_dir / PYPROJECT_NAME
     if not path.exists():
         return list(config.environment.packages)
     try:
         data = tomllib.loads(path.read_text())
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
-        return None
+        return []
     project = data.get("project")
-    packages = _string_list(project.get("dependencies") if isinstance(project, dict) else None)
-    groups = data.get("dependency-groups")
-    if isinstance(groups, dict):
-        for name in _default_groups(data, groups):
-            packages.extend(_group_packages(groups, name, set()))
-    build = data.get("build-system")
-    if isinstance(build, dict):
-        packages.extend(_string_list(build.get("requires")))
-    return list(dict.fromkeys(packages))
+    dependencies = project.get("dependencies") if isinstance(project, dict) else None
+    if not isinstance(dependencies, list):
+        return []
+    return [item for item in dependencies if isinstance(item, str)]
 
 
 def wants_install(config: Config, install: bool | None) -> bool:
@@ -243,22 +223,20 @@ def setup_environment(
 ) -> EnvironmentResult:
     if not config.auto_venv:
         return EnvironmentResult(status="disabled")
+    custom = bool(config.environment.command)
+    if not custom and not (project_dir / VENV_NAME).exists() and not owns_pyproject(project_dir):
+        return EnvironmentResult(
+            status="user_managed",
+            install_command="uv sync",
+            message=f"the project has its own {PYPROJECT_NAME}, so kag doesn't install it",
+        )
     packages = planned_packages(project_dir, config)
-    commands = install_commands(config.environment, packages or [])
-    base = {
-        "packages": packages or [],
-        "install_command": describe(commands),
-    }
+    commands = install_commands(config.environment, packages)
+    base = {"packages": packages, "install_command": describe(commands)}
     if not _should_run(config, project_dir):
         return EnvironmentResult(status="exists", **base)
     if not install:
         return EnvironmentResult(status="not_installed", **base)
-    if packages is None and not config.environment.command and not shutil.which("uv"):
-        return EnvironmentResult(
-            status="failed",
-            message=f"couldn't read {PYPROJECT_NAME} to list its packages for pip",
-            **base,
-        )
     venv_existed = (project_dir / VENV_NAME).exists()
 
     log_path = project_dir / LOG_PATH
@@ -283,6 +261,11 @@ def setup_environment(
 
 def follow_up(result: EnvironmentResult, project_dir: Path) -> str | None:
     retry = f"cd {shlex.quote(str(project_dir))} && {result.install_command}"
+    if result.status == "user_managed":
+        return (
+            f"This project has its own {PYPROJECT_NAME}, so kag didn't install anything. "
+            f"Review it, then run: {retry}"
+        )
     if result.status == "not_installed":
         return f"Python packages were not installed. To install them: {retry}"
     if result.status == "failed":
