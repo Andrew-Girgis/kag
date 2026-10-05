@@ -21,6 +21,7 @@ VENV_NAME = ".venv"
 LOG_PATH = Path(".kag") / "logs" / "environment.log"
 DEFAULT_REQUIRES_PYTHON = ">=3.10"
 POLL_SECONDS = 0.2
+ISOLATED_ENV_VARS = ("UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV")
 
 
 @dataclass
@@ -164,15 +165,23 @@ def describe(commands: list[list[str]]) -> str:
     return " && ".join(_display(command) for command in commands)
 
 
+def _child_env(custom: bool) -> dict[str, str] | None:
+    if custom:
+        return None
+    return {key: value for key, value in os.environ.items() if key not in ISOLATED_ENV_VARS}
+
+
 def _run(
     command: list[str],
     project_dir: Path,
     log_file,
     check_cancel: Callable[[], None],
+    env: dict[str, str] | None = None,
 ) -> int:
     process = subprocess.Popen(
         command,
         cwd=str(project_dir),
+        env=env,
         stdin=subprocess.DEVNULL,
         stdout=log_file,
         stderr=subprocess.STDOUT,
@@ -242,11 +251,12 @@ def setup_environment(
     log_path = project_dir / LOG_PATH
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log = LOG_PATH.as_posix()
+    env = _child_env(custom)
     with log_path.open("ab") as log_file:
         for command in commands:
             report(f"Setting up the Python environment: {_display(command)}")
             try:
-                code = _run(command, project_dir, log_file, check_cancel)
+                code = _run(command, project_dir, log_file, check_cancel, env)
             except OSError as exc:
                 code = None
                 message = f"couldn't run {_display(command)}: {exc}"

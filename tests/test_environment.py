@@ -572,3 +572,26 @@ def test_kag_new_tells_agents_about_a_users_pyproject(
 
     assert result["environment"]["status"] == "user_managed"
     assert "its own pyproject.toml" in result["next_steps"][-1]
+
+
+def test_built_in_install_ignores_outside_environment_overrides(
+    tmp_path: Path, popen: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", "/shared/env")
+    monkeypatch.setenv("VIRTUAL_ENV", "/other/.venv")
+    monkeypatch.setenv("KEEP_ME", "1")
+
+    _setup(tmp_path / "p", Config(kag_path=tmp_path), install=True)
+
+    env = popen["calls"][0]["env"]
+    assert "UV_PROJECT_ENVIRONMENT" not in env
+    assert "VIRTUAL_ENV" not in env
+    assert env["KEEP_ME"] == "1"
+
+
+def test_custom_command_inherits_the_environment(tmp_path: Path, popen: dict) -> None:
+    config = Config(kag_path=tmp_path, environment=EnvironmentConfig(command=["pixi", "install"]))
+
+    _setup(tmp_path / "p", config, install=True)
+
+    assert popen["calls"][0]["env"] is None
