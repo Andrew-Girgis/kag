@@ -13,34 +13,46 @@ from .config import Config
 RESULT_FILE = Path.home() / ".kag_result"
 
 HELP_TEXT = """Usage:
-  kag [query]
-  kag new <competition> [options]
-  kag login
-  kag kaggle <args>
-  kag --init
-  kag --doctor [--json]
-  kag --version
-  kag --help
-
-Open a Kaggle competition picker and scaffold local workspaces.
-
-Arguments:
-  query             Optional initial competition search query.
-
-Commands:
-  new               Create a workspace without the TUI (for scripts and agents).
-                    Run `kag new --help` for options.
-  login             Sign in to Kaggle in your browser (uses the Kaggle CLI bundled
-                    with kag).
-  kaggle            Run the Kaggle CLI bundled with kag, e.g.
-                    `kag kaggle competitions submit -c titanic -f sub.csv -m "v1"`.
+  kag [query]              Open the competition picker, optionally searching
+  kag search <query>       Open the picker with a search query
+  kag new <competition>    Create a workspace without the TUI (scripts and agents)
+  kag login                Sign in to Kaggle in your browser
+  kag doctor [--json]      Check your environment
+  kag init                 Print shell integration that cds into new projects
+  kag kaggle <args>        Run the Kaggle CLI bundled with kag
 
 Options:
-  --init            Print optional shell integration for auto-cd.
-  --doctor          Run environment checks.
-  --json            With --doctor, print machine-readable checks.
-  --version         Show installed version.
-  --help, -h        Show this help message."""
+  -h, --help               Show this help (or `kag <command> --help`)
+  --version                Show the installed version
+
+A bare query searches unless it is a command name; use `kag search <query>` to
+search for words like "new" or "login"."""
+
+SEARCH_HELP_TEXT = """Usage:
+  kag search <query>
+
+Open the competition picker with <query> typed into the search box.
+`kag <query>` does the same unless the first word is a command name."""
+
+DOCTOR_HELP_TEXT = """Usage:
+  kag doctor [--json]
+
+Check the bundled Kaggle CLI and library, Kaggle credentials and access,
+KAG_PATH, the shell hook, and detected editors.
+
+Options:
+  --json    Print machine-readable results."""
+
+INIT_HELP_TEXT = '''Usage:
+  kag init
+
+Print a shell function that makes kag cd into the project you open. Add this to
+~/.zshrc or ~/.bashrc:
+
+  eval "$(kag init)"'''
+
+COMMANDS = ("search", "new", "login", "doctor", "init", "kaggle")
+HELP_FLAGS = ("-h", "--help")
 
 
 KAGGLE_LOGIN_HINT = "run `kag login` or set KAGGLE_API_TOKEN"
@@ -334,48 +346,89 @@ def doctor_command(json_output: bool = False) -> int:
     return 0
 
 
-def main() -> None:
-    args = sys.argv[1:]
+def _usage_error(message: str) -> int:
+    print(f"kag: {message}", file=sys.stderr)
+    print("Run `kag --help` for usage.", file=sys.stderr)
+    return 2
 
-    if args and args[0] == "login":
-        raise SystemExit(login_command(args[1:]))
-    if args and args[0] == "kaggle":
-        raise SystemExit(kaggle_passthrough(args[1:]))
-    if args and args[0] == "new":
-        from .new_command import run_new
 
-        raise SystemExit(run_new(args[1:]))
-    if "--help" in args or "-h" in args:
-        print(HELP_TEXT)
-        return
-    if "--init" in args:
-        print(init_command())
-        return
-    if "--doctor" in args:
-        json_output = "--json" in args
-        raise SystemExit(doctor_command(json_output=json_output))
-    if "--version" in args:
-        print(f"kag {__version__}")
-        return
+def _command_help(args: list[str], text: str) -> bool:
+    if any(arg in HELP_FLAGS for arg in args):
+        print(text)
+        return True
+    return False
 
+
+def run_tui(initial_query: str) -> int:
     error = check_kaggle_cli()
     if error:
         from rich.console import Console
 
-        console = Console(stderr=True)
-        console.print(f"[bold red]Error:[/bold red] {error}")
-        sys.exit(1)
+        Console(stderr=True).print(f"[bold red]Error:[/bold red] {error}")
+        return 1
 
     from .tui import KagApp
 
-    initial_query = " ".join(args).strip() if args else ""
-    config = Config.load()
-    app = KagApp(config=config, initial_query=initial_query)
+    app = KagApp(config=Config.load(), initial_query=initial_query)
     app.run()
-    result = app.result
+    if app.result:
+        RESULT_FILE.write_text(app.result)
+    return 0
 
-    if result:
-        RESULT_FILE.write_text(result)
+
+def run_command(args: list[str]) -> int:
+    if not args:
+        return run_tui("")
+
+    command, rest = args[0], args[1:]
+    if command == "--init":
+        command = "init"
+    elif command == "--doctor":
+        command = "doctor"
+
+    if command == "new":
+        from .new_command import run_new
+
+        return run_new(rest)
+    if command == "login":
+        return login_command(rest)
+    if command == "kaggle":
+        return kaggle_passthrough(rest)
+    if command == "init":
+        if _command_help(rest, INIT_HELP_TEXT):
+            return 0
+        if rest:
+            return _usage_error(f"init takes no arguments: {' '.join(rest)}")
+        print(init_command())
+        return 0
+    if command == "doctor":
+        if _command_help(rest, DOCTOR_HELP_TEXT):
+            return 0
+        unknown = [arg for arg in rest if arg != "--json"]
+        if unknown:
+            return _usage_error(f"unknown doctor option: {unknown[0]}")
+        return doctor_command(json_output="--json" in rest)
+    if command == "search":
+        if _command_help(rest, SEARCH_HELP_TEXT):
+            return 0
+        return run_tui(" ".join(rest).strip())
+
+    if any(arg in HELP_FLAGS for arg in args):
+        print(HELP_TEXT)
+        return 0
+    if command == "--version":
+        print(f"kag {__version__}")
+        return 0
+    option = next((arg for arg in args if arg.startswith("-")), None)
+    if option is not None:
+        return _usage_error(f"unknown option: {option}")
+    return run_tui(" ".join(args).strip())
+
+
+def main() -> None:
+    code = run_command(sys.argv[1:])
+    if code:
+        raise SystemExit(code)
 
 
 if __name__ == "__main__":

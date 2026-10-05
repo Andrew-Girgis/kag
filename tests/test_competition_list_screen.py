@@ -40,7 +40,7 @@ async def test_remote_failure_keeps_local_projects_and_shows_guidance(
         "Expected a clear remote-fetch failure message when Kaggle competition loading raises an exception."
     )
     assert "local notebooks are still available" in text
-    assert "kag --doctor" in text, (
+    assert "kag doctor" in text, (
         "Expected troubleshooting guidance to be shown when remote competition loading fails."
     )
     assert "no competitions found" not in text

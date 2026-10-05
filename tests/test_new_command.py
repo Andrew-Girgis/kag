@@ -290,8 +290,6 @@ def test_cli_dispatches_new_subcommand(
 ) -> None:
     monkeypatch.setattr(cli.sys, "argv", ["kag", "new", "titanic", "--json"])
 
-    with pytest.raises(SystemExit) as exit_info:
-        cli.main()
+    cli.main()
 
-    assert exit_info.value.code == 0
     assert json.loads(capsys.readouterr().out)["status"] == "created"

@@ -95,7 +95,7 @@ Use TestPyPI to validate packaging before the real release.
 
    uvx --isolated --from "kag @ $WHEEL_URL" kag --version
    uvx --isolated --from "kag @ $WHEEL_URL" kag --help
-   uvx --isolated --from "kag @ $WHEEL_URL" kag --doctor
+   uvx --isolated --from "kag @ $WHEEL_URL" kag doctor
    ```
 
    This installs `kag` from TestPyPI and all dependencies from real PyPI, without touching an installed `kag`. Avoid `--index-url`/`--extra-index-url` mixes: `kag` also exists on PyPI, so uv may resolve the old production release instead of the rehearsal build, and TestPyPI copies of dependencies are not trustworthy.
