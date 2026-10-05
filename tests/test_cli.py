@@ -236,7 +236,14 @@ def test_check_kaggle_cli_does_not_need_kaggle_on_path(monkeypatch: pytest.Monke
 
 
 def test_kaggle_commands_use_the_bundled_cli() -> None:
-    assert cli.kaggle_command("auth", "login") == [sys.executable, "-m", "kaggle", "auth", "login"]
+    assert cli.kaggle_command("auth", "login") == [
+        sys.executable,
+        "-P",
+        "-m",
+        "kaggle",
+        "auth",
+        "login",
+    ]
 
 
 def test_doctor_shows_kaggle_auth_error_from_stdout(
@@ -246,7 +253,7 @@ def test_doctor_shows_kaggle_auth_error_from_stdout(
     completed_process: type[SimpleNamespace],
 ) -> None:
     def fake_run(cmd: list[str], *args: object, **kwargs: object) -> object:
-        if cmd[1:] == ["-m", "kaggle", "--version"]:
+        if cmd[1:] == ["-P", "-m", "kaggle", "--version"]:
             return completed_process(returncode=0, stdout="Kaggle CLI 2.2.4\n", stderr="")
         return completed_process(
             returncode=1,
@@ -274,7 +281,7 @@ def test_doctor_reports_bundled_cli(
     completed_process: type[SimpleNamespace],
 ) -> None:
     def fake_run(cmd: list[str], *args: object, **kwargs: object) -> object:
-        if cmd[1:] == ["-m", "kaggle", "--version"]:
+        if cmd[1:] == ["-P", "-m", "kaggle", "--version"]:
             return completed_process(returncode=0, stdout="Kaggle CLI 2.2.4\n", stderr="")
         return completed_process(returncode=0, stdout="ref,deadline\n", stderr="")
 
@@ -313,9 +320,9 @@ def test_login_runs_bundled_auth_login_then_verifies(
         cli.main()
 
     assert exit_info.value.code == 0
-    assert calls[0][1:5] == ["-m", "kaggle", "competitions", "list"]
-    assert calls[1] == [sys.executable, "-m", "kaggle", "auth", "login"]
-    assert calls[2][1:5] == ["-m", "kaggle", "competitions", "list"]
+    assert calls[0][1:6] == ["-P", "-m", "kaggle", "competitions", "list"]
+    assert calls[1] == [sys.executable, "-P", "-m", "kaggle", "auth", "login"]
+    assert calls[2][1:6] == ["-P", "-m", "kaggle", "competitions", "list"]
     assert "Logged in. kag can reach Kaggle." in capsys.readouterr().out
 
 
@@ -352,7 +359,7 @@ def test_login_force_runs_login_and_accepts_existing_session(
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
 
     assert cli.login_command(["--force"]) == 0
-    assert calls[0] == [sys.executable, "-m", "kaggle", "auth", "login", "--force"]
+    assert calls[0] == [sys.executable, "-P", "-m", "kaggle", "auth", "login", "--force"]
 
 
 def test_login_reports_cancelled_login(
@@ -418,5 +425,11 @@ def test_kaggle_passthrough_runs_bundled_cli_with_arguments(
 
     assert exit_info.value.code == 7
     assert calls == [
-        [sys.executable, "-m", "kaggle", "competitions", "submit", "-c", "titanic", "--help"]
+        [sys.executable, "-P", "-m", "kaggle", "competitions", "submit", "-c", "titanic", "--help"]
     ]
+
+
+def test_bundled_cli_ignores_modules_in_the_working_directory() -> None:
+    command = cli.kaggle_command("--version")
+
+    assert command[:4] == [sys.executable, "-P", "-m", "kaggle"]

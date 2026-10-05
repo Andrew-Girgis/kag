@@ -26,7 +26,7 @@ KAGGLE_CLI_MISSING = "The Kaggle CLI bundled with kag is missing; reinstall kag"
 
 
 def kaggle_command(*args: str) -> list[str]:
-    return [sys.executable, "-m", "kaggle", *args]
+    return [sys.executable, "-P", "-m", "kaggle", *args]
 
 
 def bundled_kaggle_available() -> bool:

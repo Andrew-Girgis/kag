@@ -17,7 +17,9 @@ def _is_kaggle_command(cmd: Sequence[str] | str) -> bool:
     parts = list(cmd)
     if not parts:
         return False
-    return Path(str(parts[0])).name == "kaggle" or parts[1:3] == ["-m", "kaggle"]
+    if Path(str(parts[0])).name == "kaggle":
+        return True
+    return any(parts[i : i + 2] == ["-m", "kaggle"] for i in range(1, min(len(parts), 4)))
 
 
 @pytest.fixture(autouse=True)
