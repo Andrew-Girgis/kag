@@ -155,7 +155,8 @@ def test_agents_md_for_csv_competition(titanic_data: Path) -> None:
         "target columns, are listed in `data/SCHEMA.md`."
     ) in agents
     assert "PassengerId" not in agents
-    assert 'kaggle competitions submit -c titanic -f <file> -m "<message>"' in agents
+    assert 'kag kaggle competitions submit -c titanic -f <file> -m "<message>"' in agents
+    assert "`kaggle " not in agents
     assert "see `data/SCHEMA.md`" in agents
 
 
@@ -171,7 +172,8 @@ def test_agents_md_for_notebook_only_competition_without_data(tmp_path: Path) ->
 
     assert "Kaggle notebook only (code competition)" in agents
     assert "Submit by running a Kaggle notebook attached to the competition." in agents
-    assert "kaggle competitions download -c titanic -p data" in agents
+    assert "run `kag new titanic --force`" in agents
+    assert "`kaggle " not in agents
     assert "See the Evaluation section of `notes.md`." in agents
 
 

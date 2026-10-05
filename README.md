@@ -85,7 +85,7 @@ kag installs the Kaggle CLI and library for you (Python 3.11+); there is nothing
 kag login
 ```
 
-This runs the Kaggle CLI bundled with kag (`kaggle auth login`) and caches credentials in `~/.kaggle/`. Other ways to authenticate also work:
+This runs the Kaggle CLI bundled with kag (`kaggle auth login`) and caches credentials in `~/.kaggle/`. You don't need a separate `kaggle` command: `kag kaggle <args>` runs the bundled CLI (for example `kag kaggle competitions submit -c titanic -f submission.csv -m "first try"`). Other ways to authenticate also work:
 - API token: `KAGGLE_API_TOKEN`, or the token saved to `~/.kaggle/access_token`
 - Legacy: `KAGGLE_USERNAME` + `KAGGLE_KEY`, or `~/.kaggle/kaggle.json` containing `username` and `key`
 

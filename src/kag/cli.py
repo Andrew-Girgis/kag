@@ -16,6 +16,7 @@ HELP_TEXT = """Usage:
   kag [query]
   kag new <competition> [options]
   kag login
+  kag kaggle <args>
   kag --init
   kag --doctor [--json]
   kag --version
@@ -31,6 +32,8 @@ Commands:
                     Run `kag new --help` for options.
   login             Sign in to Kaggle in your browser (uses the Kaggle CLI bundled
                     with kag).
+  kaggle            Run the Kaggle CLI bundled with kag, e.g.
+                    `kag kaggle competitions submit -c titanic -f sub.csv -m "v1"`.
 
 Options:
   --init            Print optional shell integration for auto-cd.
@@ -48,7 +51,8 @@ LOGIN_HELP_TEXT = """Usage:
 
 Sign in to Kaggle in your browser using the Kaggle CLI bundled with kag
 (`kaggle auth login`). Credentials are cached in ~/.kaggle/ and shared with the
-kaggle command. Alternatively set KAGGLE_API_TOKEN."""
+kaggle command. If you are already logged in this does nothing; pass --force to
+sign in again. Alternatively set KAGGLE_API_TOKEN."""
 
 
 def _kaggle_config_dir() -> Path:
@@ -151,6 +155,14 @@ def _auth_probe() -> tuple[bool, str]:
     return False, details
 
 
+def kaggle_passthrough(args: list[str]) -> int:
+    cli_error = check_kaggle_cli()
+    if cli_error:
+        print(cli_error, file=sys.stderr)
+        return 1
+    return subprocess.run(kaggle_command(*args)).returncode
+
+
 def login_command(args: list[str]) -> int:
     if "-h" in args or "--help" in args:
         print(LOGIN_HELP_TEXT)
@@ -159,11 +171,14 @@ def login_command(args: list[str]) -> int:
     if cli_error:
         print(cli_error, file=sys.stderr)
         return 1
+    if "--force" not in args and _auth_probe()[0]:
+        print("Already logged in to Kaggle. Use `kag login --force` to sign in again.")
+        return 0
     result = subprocess.run(kaggle_command("auth", "login", *args))
-    if result.returncode != 0:
+    ok, details = _auth_probe()
+    if result.returncode != 0 and not ok:
         print("Kaggle login did not complete.", file=sys.stderr)
         return result.returncode
-    ok, details = _auth_probe()
     if ok:
         print("Logged in. kag can reach Kaggle.")
         return 0
@@ -324,6 +339,8 @@ def main() -> None:
 
     if args and args[0] == "login":
         raise SystemExit(login_command(args[1:]))
+    if args and args[0] == "kaggle":
+        raise SystemExit(kaggle_passthrough(args[1:]))
     if args and args[0] == "new":
         from .new_command import run_new
 

@@ -301,7 +301,10 @@ def test_login_runs_bundled_auth_login_then_verifies(
 
     def fake_run(cmd: list[str], *args: object, **kwargs: object) -> object:
         calls.append(cmd)
-        return completed_process(returncode=0, stdout="ref,deadline\n", stderr="")
+        logged_in = any("login" in call for call in calls)
+        if "login" in cmd or logged_in:
+            return completed_process(returncode=0, stdout="ref,deadline\n", stderr="")
+        return completed_process(returncode=1, stdout="Authentication required", stderr="")
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
     monkeypatch.setattr(cli.sys, "argv", ["kag", "login"])
@@ -310,9 +313,46 @@ def test_login_runs_bundled_auth_login_then_verifies(
         cli.main()
 
     assert exit_info.value.code == 0
-    assert calls[0] == [sys.executable, "-m", "kaggle", "auth", "login"]
-    assert calls[1][1:5] == ["-m", "kaggle", "competitions", "list"]
+    assert calls[0][1:5] == ["-m", "kaggle", "competitions", "list"]
+    assert calls[1] == [sys.executable, "-m", "kaggle", "auth", "login"]
+    assert calls[2][1:5] == ["-m", "kaggle", "competitions", "list"]
     assert "Logged in. kag can reach Kaggle." in capsys.readouterr().out
+
+
+def test_login_when_already_logged_in_does_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    completed_process: type[SimpleNamespace],
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], *args: object, **kwargs: object) -> object:
+        calls.append(cmd)
+        return completed_process(returncode=0, stdout="ref,deadline\n", stderr="")
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    assert cli.login_command([]) == 0
+    assert not any("login" in call for call in calls)
+    assert "Already logged in" in capsys.readouterr().out
+
+
+def test_login_force_runs_login_and_accepts_existing_session(
+    monkeypatch: pytest.MonkeyPatch,
+    completed_process: type[SimpleNamespace],
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], *args: object, **kwargs: object) -> object:
+        calls.append(cmd)
+        if "login" in cmd:
+            return completed_process(returncode=1, stdout="", stderr="Already logged in")
+        return completed_process(returncode=0, stdout="ref,deadline\n", stderr="")
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    assert cli.login_command(["--force"]) == 0
+    assert calls[0] == [sys.executable, "-m", "kaggle", "auth", "login", "--force"]
 
 
 def test_login_reports_cancelled_login(
@@ -356,3 +396,27 @@ def test_login_help_does_not_run_kaggle(
 
     assert cli.login_command(["--help"]) == 0
     assert capsys.readouterr().out == cli.LOGIN_HELP_TEXT + "\n"
+
+
+def test_kaggle_passthrough_runs_bundled_cli_with_arguments(
+    monkeypatch: pytest.MonkeyPatch,
+    completed_process: type[SimpleNamespace],
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], *args: object, **kwargs: object) -> object:
+        calls.append(cmd)
+        return completed_process(returncode=7, stdout="", stderr="")
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        cli.sys, "argv", ["kag", "kaggle", "competitions", "submit", "-c", "titanic", "--help"]
+    )
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main()
+
+    assert exit_info.value.code == 7
+    assert calls == [
+        [sys.executable, "-m", "kaggle", "competitions", "submit", "-c", "titanic", "--help"]
+    ]
