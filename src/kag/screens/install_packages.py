@@ -66,7 +66,8 @@ class InstallPackagesScreen(Screen):
             if packages and not environment.command:
                 yield Static(", ".join(packages), id="install-packages")
             yield Static(
-                f"Command: {describe(install_commands(environment))}", id="install-command"
+                f"Command: {describe(install_commands(environment, packages or []))}",
+                id="install-command",
             )
             yield Static(
                 "Installing runs code from these packages. Change the list, or set "
