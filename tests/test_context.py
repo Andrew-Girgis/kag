@@ -480,3 +480,29 @@ def test_profile_data_stops_enumerating_when_cancelled(titanic_data: Path) -> No
     data = context.profile_data(titanic_data, [], cancel)
 
     assert data.files == []
+
+
+def test_headerless_csv_is_streamed_not_materialized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(context, "MAX_EXACT_COUNT_BYTES", 1)
+    monkeypatch.setattr(context, "SAMPLE_ROWS", 2)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "big.csv").write_text("".join(f"{i},{i * 2}\n" for i in range(5000)))
+    consumed: list[int] = []
+    real_reader = context.csv.reader
+
+    def counting_reader(handle: object, *args: object, **kwargs: object) -> object:
+        rows = real_reader(handle, *args, **kwargs)  # type: ignore[arg-type]
+        if not hasattr(handle, "name"):
+            return rows
+        return (consumed.append(1) or row for row in rows)
+
+    monkeypatch.setattr(context.csv, "reader", counting_reader)
+
+    profile = context.profile_csv(data_dir / "big.csv", data_dir)
+
+    assert profile.has_header is False
+    assert len(consumed) <= 4
+    assert profile.rows_estimated is True

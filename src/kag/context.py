@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import itertools
 import json
 import re
 import threading
@@ -137,7 +138,7 @@ def profile_csv(
                 header = [f"column_{index}" for index in range(1, len(first) + 1)]
                 pending = [first]
             samples: list[list[str]] = [[] for _ in header]
-            for row in [*pending, *reader] if pending else reader:
+            for row in itertools.chain(pending, reader):
                 if records % CANCEL_CHECK_RECORDS == 0 and _cancelled(cancel):
                     return profile
                 if records < SAMPLE_ROWS:
