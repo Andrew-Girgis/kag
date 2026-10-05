@@ -60,7 +60,8 @@ class ExistingProjectScreen(Screen):
             yield Static(str(self.project_dir), id="existing-path")
             yield Static("\n".join(self._summary_lines()), id="existing-summary")
             yield Static(
-                "kag never overwrites files that already exist in this folder.",
+                "kag never overwrites your work: it only adds missing files and refreshes "
+                "context files it generated that you haven't edited.",
                 id="existing-guidance",
             )
             yield ListView(

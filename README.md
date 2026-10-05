@@ -174,7 +174,7 @@ Options: `--no-download`, `--no-git`, `--no-venv`, `--editor NAME`, `--force`, `
 | `exists` | 4 | The folder already exists; rerun with `--force` to add missing files. |
 | `cancelled` | 130 | Interrupted with Ctrl-C; changes were rolled back. |
 
-Every project includes `AGENTS.md` (plus a `CLAUDE.md` that imports it), `data/SCHEMA.md`, and `.kag/competition.json`, so an agent starts with the metric, submission format, column schemas, and daily submission limit.
+Every project includes `AGENTS.md` (plus a `CLAUDE.md` that imports it) and `.kag/competition.json`, so an agent starts with the metric, submission template, and daily submission limit. When data is downloaded, `data/SCHEMA.md` (kept local with the data, not committed) adds per-file column schemas; with `--no-download`, `files.schema` is `null` until a later `kag new --force` downloads the data.
 
 ## How it works
 

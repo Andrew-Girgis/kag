@@ -394,6 +394,21 @@ def _write_if_missing(path: Path, content: str) -> bool:
     return True
 
 
+def _write_generated(path: Path, content: str, previous_hash: str | None) -> bool:
+    if not path.exists():
+        return _write_if_missing(path, content)
+    try:
+        current = path.read_text()
+    except OSError:
+        return False
+    if current == content:
+        return True
+    if previous_hash is None or context.content_hash(current) != previous_hash:
+        return False
+    path.write_text(content)
+    return True
+
+
 def _write_agent_context(
     project_dir: Path,
     competition: Competition,
@@ -407,12 +422,18 @@ def _write_agent_context(
         raise ProjectCreationCancelled("Project setup cancelled")
     manifest = context.build_manifest(competition, details, data_profile, notebook_name)
     title = details.title if details else competition.title
-    _write_if_missing(project_dir / context.MANIFEST_PATH, context.manifest_json(manifest))
+    previous = context.generated_hashes(project_dir)
+    outputs = {"AGENTS.md": context.render_agents_md(manifest)}
     if data_profile.downloaded:
-        _write_if_missing(
-            project_dir / context.SCHEMA_PATH, context.render_schema_md(title, data_profile)
-        )
-    _write_if_missing(project_dir / "AGENTS.md", context.render_agents_md(manifest))
+        outputs[context.SCHEMA_PATH.as_posix()] = context.render_schema_md(title, data_profile)
+    owned: dict[str, str] = {}
+    for name, content in outputs.items():
+        if _write_generated(project_dir / name, content, previous.get(name)):
+            owned[name] = context.content_hash(content)
+    manifest["generated_files"] = owned
+    manifest_path = project_dir / context.MANIFEST_PATH
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(context.manifest_json(manifest))
     _write_if_missing(project_dir / "CLAUDE.md", "@AGENTS.md\n")
 
 
