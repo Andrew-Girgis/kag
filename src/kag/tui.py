@@ -1,10 +1,15 @@
+from collections.abc import Iterable
+from functools import partial
+
 from textual import work
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, SystemCommand
 from textual.binding import Binding
+from textual.command import CommandPalette, DiscoveryHit, Hit, Hits, Provider
+from textual.screen import Screen
 from textual.widgets import Header, Footer
 
 from . import __version__
-from .config import Config
+from .config import THEME_ENV, Config, save_theme
 from .kaggle_api import Competition
 from .screens.access_required import AccessRequiredScreen
 from .screens.competition_list import CompetitionListScreen
@@ -13,7 +18,28 @@ from .screens.existing_project import ExistingProjectScreen
 from .screens.confirm_download import ConfirmDownloadScreen
 from .screens.creating_project import CreatingProjectScreen
 from .project import existing_project_dir
+from .theme import ALIASES, resolve_theme, theme_label, theme_names
 from .update_check import UpdateNotice, check_for_update
+
+
+class ThemeProvider(Provider):
+    @property
+    def commands(self) -> list[tuple[str, str]]:
+        return [
+            ("terminal (your terminal's colours)" if name == "terminal" else name, name)
+            for name in theme_names()
+        ]
+
+    async def discover(self) -> Hits:
+        for label, name in self.commands:
+            yield DiscoveryHit(label, partial(self.app.choose_theme, name))
+
+    async def search(self, query: str) -> Hits:
+        matcher = self.matcher(query)
+        for label, name in self.commands:
+            score = matcher.match(label)
+            if score > 0:
+                yield Hit(score, matcher.highlight(label), partial(self.app.choose_theme, name))
 
 
 class KagApp(App):
@@ -90,6 +116,23 @@ class KagApp(App):
         border-top: solid $surface-lighten-2;
         text-style: bold;
     }
+    App:ansi #helpbar {
+        color: ansi_default;
+        background: ansi_default;
+        border-top: none;
+        text-style: dim;
+    }
+    App:ansi ListView > ListItem.-highlight,
+    App:ansi ListView:focus > ListItem.-highlight,
+    App:ansi OptionList > .option-list--option-highlighted,
+    App:ansi OptionList:focus > .option-list--option-highlighted {
+        color: $block-cursor-foreground;
+        background: $block-cursor-background;
+        text-style: $block-cursor-text-style;
+    }
+    App:ansi CommandPalette {
+        background: ansi_default;
+    }
     """
 
     BINDINGS = [
@@ -102,6 +145,10 @@ class KagApp(App):
         self.config = config
         self.initial_query = initial_query
         self.result: str | None = None
+        self.messages: list[str] = []
+        self.theme, self._theme_warning = resolve_theme(config.theme)
+        if self._theme_warning:
+            self.messages.append(self._theme_warning)
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -110,6 +157,35 @@ class KagApp(App):
     def on_mount(self) -> None:
         self.push_screen(CompetitionListScreen(self.config, initial_query=self.initial_query))
         self._check_for_update()
+        if self._theme_warning:
+            self.notify(self._theme_warning, severity="warning", timeout=10)
+
+    def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
+        yield SystemCommand(
+            "Theme", "Change kag's colours (saved for next time)", self.search_themes
+        )
+        for command in super().get_system_commands(screen):
+            if command.title != "Theme":
+                yield command
+
+    def search_themes(self) -> None:
+        self.push_screen(
+            CommandPalette(providers=[ThemeProvider], placeholder="Search for themes…")
+        )
+
+    def choose_theme(self, name: str) -> None:
+        self.theme = ALIASES.get(name, name)
+        label = theme_label(self.theme)
+        try:
+            path = save_theme(label)
+        except Exception as exc:
+            self.notify(f"Theme changed, but couldn't save it: {exc}", severity="error")
+            return
+        message = f"Theme set to {label} and saved to {path}."
+        if self.config.theme_source == THEME_ENV:
+            message += f" {THEME_ENV} is set, so it overrides this next time."
+        self.config.theme = label
+        self.notify(message, timeout=6)
 
     @work(thread=True)
     def _check_for_update(self) -> None:
