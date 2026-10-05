@@ -546,8 +546,11 @@ def healthy_kaggle(
     def fake_run(cmd: list[str], *args: object, **kwargs: object) -> object:
         if cmd[1:] == ["-P", "-m", "kaggle", "--version"]:
             return completed_process(returncode=0, stdout="Kaggle CLI 2.2.4\n", stderr="")
+        if cmd[1:2] == ["-c"]:
+            return completed_process(returncode=0, stdout=f"{tmp_home}\n", stderr="")
         return completed_process(returncode=0, stdout="ref,deadline\n", stderr="")
 
+    tmp_home = kaggle_home
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
     monkeypatch.setattr(cli, "_kaggle_auth_status", lambda: (True, "KAGGLE_API_TOKEN"))
     monkeypatch.setattr(cli.kaggle_sdk, "sdk_version", lambda: "2.2.4")
@@ -619,6 +622,7 @@ def test_doctor_fails_when_a_required_check_fails(
         ("/bin/zsh", ".zshrc"),
         ("/bin/bash", ".bashrc"),
         ("/bin/bash", ".bash_profile"),
+        ("/bin/bash", ".bash_login"),
         ("/opt/homebrew/bin/bash", ".profile"),
         ("", ".bashrc"),
     ],
@@ -655,6 +659,51 @@ def test_doctor_shell_hook_respects_zdotdir(
 
     hook = next(check for check in payload["checks"] if check["name"] == "shell hook")
     assert hook["status"] == "ok"
+
+
+def test_doctor_asks_zsh_for_an_unexported_zdotdir(
+    healthy_kaggle: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    completed_process: type[SimpleNamespace],
+) -> None:
+    zdotdir = healthy_kaggle / "zsh"
+    zdotdir.mkdir()
+    (zdotdir / ".zshrc").write_text('eval "$(kag init)"\n')
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], *args: object, **kwargs: object) -> object:
+        calls.append(cmd)
+        if cmd[:2] == ["/bin/zsh", "-c"]:
+            return completed_process(returncode=0, stdout=f"{zdotdir}\n", stderr="")
+        return completed_process(returncode=0, stdout="Kaggle CLI 2.2.4\n", stderr="")
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    _, payload = _doctor_json(capsys)
+
+    hook = next(check for check in payload["checks"] if check["name"] == "shell hook")
+    assert hook["status"] == "ok"
+    assert hook["details"] == str(zdotdir / ".zshrc")
+    assert any(cmd[:2] == ["/bin/zsh", "-c"] for cmd in calls)
+
+
+def test_doctor_follows_bash_login_file_precedence(
+    healthy_kaggle: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    (healthy_kaggle / ".bash_profile").write_text("export PATH\n")
+    (healthy_kaggle / ".profile").write_text('eval "$(kag init)"\n')
+
+    _, payload = _doctor_json(capsys)
+
+    hook = next(check for check in payload["checks"] if check["name"] == "shell hook")
+    assert hook["status"] == "warn"
+    assert str(healthy_kaggle / ".bash_profile") in hook["details"]
+    assert str(healthy_kaggle / ".profile") not in hook["details"]
 
 
 def test_doctor_ignores_other_shells_rc_files(

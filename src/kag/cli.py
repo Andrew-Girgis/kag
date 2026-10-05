@@ -241,23 +241,48 @@ def _check_writable(path: Path) -> bool:
         return False
 
 
-def _shell_rc_files(shell: str) -> list[Path]:
+def _zsh_dotdir(shell_path: str | None) -> Path:
+    zdotdir = os.environ.get("ZDOTDIR")
+    if zdotdir:
+        return Path(zdotdir)
+    if shell_path:
+        try:
+            proc = subprocess.run(
+                [shell_path, "-c", 'print -r -- "${ZDOTDIR:-$HOME}"'],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                stdin=subprocess.DEVNULL,
+            )
+            lines = proc.stdout.strip().splitlines()
+            if proc.returncode == 0 and lines:
+                return Path(lines[-1])
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return Path.home()
+
+
+def _bash_startup_files() -> list[Path]:
     home = Path.home()
-    zdotdir = Path(os.environ.get("ZDOTDIR") or home)
-    zsh = [zdotdir / ".zshrc"]
-    bash = [home / ".bashrc", home / ".bash_profile", home / ".profile"]
+    login_files = [home / ".bash_profile", home / ".bash_login", home / ".profile"]
+    login_file = next((path for path in login_files if path.is_file()), login_files[0])
+    return [home / ".bashrc", login_file]
+
+
+def _shell_rc_files(shell_path: str) -> list[Path]:
+    shell = Path(shell_path).name
     if shell == "zsh":
-        return zsh
+        return [_zsh_dotdir(shell_path) / ".zshrc"]
     if shell == "bash":
-        return bash
-    return zsh + bash
+        return _bash_startup_files()
+    return [_zsh_dotdir(None) / ".zshrc", *_bash_startup_files()]
 
 
 def _shell_hook_status() -> tuple[bool, str]:
-    shell = Path(os.environ.get("SHELL", "")).name
-    if shell == "fish":
+    shell_path = os.environ.get("SHELL", "")
+    if Path(shell_path).name == "fish":
         return False, "fish isn't supported yet; kag still works, but won't cd into the project"
-    rc_files = _shell_rc_files(shell)
+    rc_files = _shell_rc_files(shell_path)
     for rc_file in rc_files:
         try:
             text = rc_file.read_text(errors="ignore")
