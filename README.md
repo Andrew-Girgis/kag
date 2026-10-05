@@ -21,13 +21,15 @@ Planned recording file path: `docs/demo.cast`
   - `All competitions`
 - Uses paginated loading for competitions (`20` per page) and auto-loads more when you reach the end.
 - Scaffolds a project folder:
-  - `data/` (download + extract)
+  - `data/` (download + extract) with `data/SCHEMA.md` describing each file's columns
   - `<competition>.ipynb`
-  - `notes.md`
+  - `notes.md` (overview, evaluation, data description, rules, and top notebooks from Kaggle)
+  - `AGENTS.md` and `CLAUDE.md` so coding agents start with the metric, submission format, and limits
+  - `.kag/competition.json` (machine-readable competition metadata)
   - `.venv` (optional)
   - `git init` (optional)
 - Checks competition access before download and opens browser tabs for `overview` + `rules` when acceptance is needed.
-- Enriches `notes.md` from Kaggle competition content (`Overview`, `Evaluation`, `Data`, `Code`, `Rules`).
+- Fills `notes.md` from Kaggle's official competition pages (`Overview`, `Evaluation`, `Data`, `Code`, `Rules`).
 
 ## Installation
 
