@@ -262,54 +262,6 @@ def test_setup_environment_stops_the_install_when_cancelled(
     assert popen["calls"][0]["start_new_session"] is True
 
 
-def test_existing_pyproject_packages_are_what_gets_reported(tmp_path: Path, popen: dict) -> None:
-    project_dir = tmp_path / "p"
-    project_dir.mkdir()
-    (project_dir / "pyproject.toml").write_text(
-        '[project]\nname = "p"\ndependencies = ["torch", "pandas"]\n'
-        '[dependency-groups]\ndev = ["pytest", "pandas"]\n'
-        '[build-system]\nrequires = ["hatchling"]\n'
-    )
-    config = Config(kag_path=tmp_path)
-
-    assert environment.planned_packages(project_dir, config) == [
-        "torch",
-        "pandas",
-        "pytest",
-        "hatchling",
-    ]
-    (project_dir / "pyproject.toml").write_text(
-        '[project]\nname = "p"\ndependencies = ["torch"]\n'
-        '[dependency-groups]\ndev = ["pytest"]\ndocs = ["mkdocs"]\nlint = ["ruff"]\n'
-    )
-    assert environment.planned_packages(project_dir, config) == ["torch", "pytest"]
-    (project_dir / "pyproject.toml").write_text(
-        '[project]\nname = "p"\ndependencies = ["torch"]\n'
-        '[dependency-groups]\ndev = ["pytest"]\ndocs = ["mkdocs"]\n'
-        '[tool.uv]\ndefault-groups = ["docs"]\n'
-    )
-    assert environment.planned_packages(project_dir, config) == ["torch", "mkdocs"]
-    (project_dir / "pyproject.toml").write_text(
-        '[project]\nname = "p"\ndependencies = []\n'
-        '[dependency-groups]\ndev = ["pytest"]\ndocs = ["mkdocs"]\n'
-        '[tool.uv]\ndefault-groups = "all"\n'
-    )
-    assert environment.planned_packages(project_dir, config) == ["pytest", "mkdocs"]
-    (project_dir / "pyproject.toml").write_text(
-        '[project]\nname = "p"\ndependencies = ["torch", "pandas"]\n'
-        '[dependency-groups]\ndev = ["pytest", "pandas"]\n'
-        '[build-system]\nrequires = ["hatchling"]\n'
-    )
-    result = _setup(project_dir, config, install=False)
-    assert result.packages == ["torch", "pandas", "pytest", "hatchling"]
-
-
-def test_unreadable_existing_pyproject_lists_no_packages(tmp_path: Path) -> None:
-    (tmp_path / "pyproject.toml").write_text("not = [valid")
-
-    assert environment.planned_packages(tmp_path, Config(kag_path=tmp_path)) is None
-
-
 def test_missing_requested_python_is_not_silently_replaced(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -512,50 +464,10 @@ def test_kag_new_warns_when_install_fails(
     assert any("Couldn't set up the Python environment" in w for w in result["warnings"])
 
 
-def test_pip_fallback_installs_the_existing_pyprojects_packages(
-    tmp_path: Path, popen: dict, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(environment.shutil, "which", lambda cmd: None)
-    project_dir = tmp_path / "p"
-    project_dir.mkdir()
-    (project_dir / "pyproject.toml").write_text('[project]\nname = "p"\ndependencies = ["torch"]\n')
-
-    result = _setup(project_dir, Config(kag_path=tmp_path), install=True)
-
-    assert result.packages == ["torch"]
-    assert popen["calls"][1]["cmd"][-4:] == ["-m", "pip", "install", "torch"]
-    assert result.install_command.endswith("pip install torch")
-
-
-def test_pip_fallback_refuses_an_unreadable_pyproject(
-    tmp_path: Path, popen: dict, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(environment.shutil, "which", lambda cmd: None)
-    project_dir = tmp_path / "p"
-    project_dir.mkdir()
-    (project_dir / "pyproject.toml").write_text("not = [valid")
-
-    result = _setup(project_dir, Config(kag_path=tmp_path), install=True)
-
-    assert result.status == "failed"
-    assert popen["calls"] == []
-
-
 def test_generated_pyproject_is_its_own_uv_workspace() -> None:
     data = tomllib.loads(environment.render_pyproject("titanic", EnvironmentConfig()))
 
     assert data["tool"]["uv"]["workspace"] == {"members": []}
-
-
-def test_included_dependency_groups_are_expanded(tmp_path: Path) -> None:
-    (tmp_path / "pyproject.toml").write_text(
-        '[project]\nname = "p"\ndependencies = []\n'
-        "[dependency-groups]\n"
-        'dev = ["ruff", { include-group = "test" }]\n'
-        'test = ["pytest", { include-group = "dev" }]\n'
-    )
-
-    assert environment.planned_packages(tmp_path, Config(kag_path=tmp_path)) == ["ruff", "pytest"]
 
 
 def test_create_project_installs_before_the_initial_commit(
@@ -581,3 +493,82 @@ def test_create_project_installs_before_the_initial_commit(
     _create(tmp_path, Config(kag_path=tmp_path, auto_git=True), install_environment=True)
 
     assert order == ["install", "git add"]
+
+
+def test_users_own_pyproject_is_never_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, popen: dict
+) -> None:
+    _stub_sources(monkeypatch)
+    (tmp_path / "titanic").mkdir()
+    (tmp_path / "titanic" / "pyproject.toml").write_text(
+        '[project]\nname = "t"\ndependencies = ["torch"]\n[tool.uv.sources]\n'
+        'torch = { git = "https://example.com/torch" }\n'
+    )
+    config = Config(kag_path=tmp_path, auto_git=False)
+
+    assert environment.needs_prompt(config, tmp_path / "titanic") is False
+    results = _create(tmp_path, config, install_environment=True)
+
+    assert results[0].status == "user_managed"
+    assert results[0].packages == []
+    assert popen["calls"] == []
+    message = environment.follow_up(results[0], tmp_path / "titanic")
+    assert message is not None and "its own pyproject.toml" in message
+
+
+def test_kag_pyproject_stays_installable_until_edited(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, popen: dict
+) -> None:
+    _stub_sources(monkeypatch)
+    project_dir = tmp_path / "titanic"
+    config = Config(kag_path=tmp_path, auto_git=False)
+
+    _create(tmp_path, config)
+    assert environment.owns_pyproject(project_dir) is True
+    assert environment.needs_prompt(config, project_dir) is True
+
+    results = _create(tmp_path, config, install_environment=True)
+    assert results[0].status == "installed"
+    assert results[0].packages == list(DEFAULT_PACKAGES)
+
+    (project_dir / "pyproject.toml").write_text(
+        (project_dir / "pyproject.toml").read_text().replace('"pandas"', '"pandas", "torch"')
+    )
+    assert environment.owns_pyproject(project_dir) is False
+
+
+def test_custom_command_still_runs_for_a_users_pyproject(tmp_path: Path, popen: dict) -> None:
+    project_dir = tmp_path / "p"
+    project_dir.mkdir()
+    (project_dir / "pyproject.toml").write_text('[project]\nname = "p"\n')
+    config = Config(kag_path=tmp_path, environment=EnvironmentConfig(command=["pixi", "install"]))
+
+    result = _setup(project_dir, config, install=True)
+
+    assert result.status == "installed"
+    assert popen["calls"][0]["cmd"] == ["pixi", "install"]
+
+
+def test_pip_fallback_installs_exactly_the_listed_packages(
+    tmp_path: Path, popen: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(environment.shutil, "which", lambda cmd: None)
+    config = Config(kag_path=tmp_path, environment=EnvironmentConfig(packages=["polars"]))
+
+    result = _setup(tmp_path / "p", config, install=True)
+
+    assert result.packages == ["polars"]
+    assert popen["calls"][1]["cmd"][-4:] == ["-m", "pip", "install", "polars"]
+
+
+def test_kag_new_tells_agents_about_a_users_pyproject(
+    new_env: dict, capsys: pytest.CaptureFixture[str]
+) -> None:
+    new_env["result"] = EnvironmentResult(
+        "user_managed", install_command="uv sync", message="own pyproject"
+    )
+
+    result = _run_new(capsys, "--install")
+
+    assert result["environment"]["status"] == "user_managed"
+    assert "its own pyproject.toml" in result["next_steps"][-1]

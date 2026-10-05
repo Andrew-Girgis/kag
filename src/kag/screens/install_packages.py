@@ -5,7 +5,7 @@ from textual.screen import Screen
 from textual.widgets import Label, ListItem, ListView, Static
 
 from ..config import Config
-from ..environment import PYPROJECT_NAME, describe, install_commands, planned_packages
+from ..environment import describe, install_commands, planned_packages
 from ..kaggle_api import Competition
 
 
@@ -45,20 +45,12 @@ class InstallPackagesScreen(Screen):
 
     def compose(self) -> ComposeResult:
         environment = self.config.environment
-        project_dir = self.config.kag_path / self.competition.slug
-        existing = (project_dir / PYPROJECT_NAME).exists()
-        packages = planned_packages(project_dir, self.config)
-        source = " listed in the project's existing pyproject.toml" if existing else ""
+        packages = planned_packages(self.config.kag_path / self.competition.slug, self.config)
         if environment.command:
             question = "Run this command to set up the project's Python environment?"
-        elif packages is None:
-            question = (
-                "Install the packages in the project's existing pyproject.toml? "
-                "kag couldn't read it to list them."
-            )
         elif packages:
             noun = "package" if len(packages) == 1 else "packages"
-            question = f"Install {len(packages)} {noun}{source} from PyPI into .venv?"
+            question = f"Install {len(packages)} {noun} from PyPI into .venv?"
         else:
             question = "Create an empty .venv for the project?"
         with Vertical(id="install-dialog"):
@@ -66,7 +58,7 @@ class InstallPackagesScreen(Screen):
             if packages and not environment.command:
                 yield Static(", ".join(packages), id="install-packages")
             yield Static(
-                f"Command: {describe(install_commands(environment, packages or []))}",
+                f"Command: {describe(install_commands(environment, packages))}",
                 id="install-command",
             )
             yield Static(

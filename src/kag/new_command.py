@@ -295,6 +295,11 @@ def run_new(argv: list[str]) -> int:
             next_steps.append(
                 f"Ask the user before installing Python packages: {env_result.install_command}"
             )
+        elif env_result.status == "user_managed":
+            next_steps.append(
+                "The project has its own pyproject.toml; ask the user before running "
+                f"{env_result.install_command}"
+            )
         elif env_result.status == "failed":
             warnings.append(environment.follow_up(env_result, project_dir) or "")
     result["warnings"] = warnings

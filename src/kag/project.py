@@ -416,6 +416,7 @@ def _write_agent_context(
     listed_files: list[str],
     notebook_name: str,
     cancel: threading.Event | None = None,
+    pyproject_written: bool = False,
 ) -> None:
     data_profile = context.profile_data(project_dir / "data", listed_files, cancel)
     if cancel is not None and cancel.is_set():
@@ -431,6 +432,11 @@ def _write_agent_context(
     for name, content in outputs.items():
         if _write_generated(project_dir / name, content, previous.get(name)):
             owned[name] = context.content_hash(content)
+    pyproject = project_dir / environment.PYPROJECT_NAME
+    if pyproject.exists():
+        current = context.content_hash(pyproject.read_text())
+        if pyproject_written or previous.get(environment.PYPROJECT_NAME) == current:
+            owned[environment.PYPROJECT_NAME] = current
     manifest["generated_files"] = owned
     manifest_path = project_dir / context.MANIFEST_PATH
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -542,11 +548,19 @@ def create_project(
         )
         _write_if_missing(project_dir / "notes.md", notes)
 
-        environment.write_pyproject(project_dir, competition.slug, config)
+        pyproject_written = environment.write_pyproject(project_dir, competition.slug, config)
 
         check_cancel()
         report("Writing agent context files...")
-        _write_agent_context(project_dir, competition, details, files, notebook_path.name, cancel)
+        _write_agent_context(
+            project_dir,
+            competition,
+            details,
+            files,
+            notebook_path.name,
+            cancel,
+            pyproject_written=pyproject_written,
+        )
 
         check_cancel()
         environment_result = environment.setup_environment(

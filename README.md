@@ -126,7 +126,7 @@ packages = ["pandas", "numpy", "matplotlib", "seaborn", "scikit-learn", "ipykern
 command = []           # replace the install step, e.g. ["pixi", "install"]
 ```
 
-kag installs with `uv sync`, or with `python -m venv` plus `pip` if `uv` isn't on your PATH. Output goes to `.kag/logs/environment.log`. If you skip the install, or it fails, kag still creates the project and tells you the command to run later. An existing `pyproject.toml` or `.venv` is never replaced.
+kag installs with `uv sync`, or with `python -m venv` plus `pip` if `uv` isn't on your PATH. Output goes to `.kag/logs/environment.log`. If you skip the install, or it fails, kag still creates the project and tells you the command to run later. An existing `pyproject.toml` or `.venv` is never replaced, and kag only installs a `pyproject.toml` it wrote itself and you haven't edited. For any other `pyproject.toml`, kag installs nothing and tells you to run `uv sync` yourself (a custom `command` still runs).
 
 ### 5. Start using kag
 
