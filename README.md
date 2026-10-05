@@ -114,6 +114,19 @@ auto_venv = true
 auto_git = true
 ```
 
+#### Colours and themes
+
+By default kag uses your terminal's own colours, with no background fill, so a transparent, blurred or themed terminal background shows through. Change it in `~/.kag_config.toml` or with `KAG_THEME`, which takes priority:
+
+```toml
+theme = "terminal"     # default: your terminal's background and 16-colour palette
+# theme = "kag"        # kag's dark look
+# theme = "nord"       # or any built-in Textual theme: gruvbox, dracula, tokyo-night,
+                       # catppuccin-mocha, rose-pine, solarized-light, ...
+```
+
+You can also press `Ctrl+P` in kag and choose **Theme** to try themes live; the one you pick is saved to `~/.kag_config.toml`. An unknown name falls back to `terminal` with a warning, and `kag doctor` shows the active theme. kag respects [`NO_COLOR`](https://no-color.org).
+
 ### 5. Start using kag
 
 ```bash

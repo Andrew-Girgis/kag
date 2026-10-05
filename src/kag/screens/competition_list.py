@@ -18,6 +18,18 @@ from ..kaggle_api import (
 from datetime import datetime
 
 
+class RowLabel(Label):
+    def __init__(self, text: Text, **kwargs) -> None:
+        super().__init__(text, **kwargs)
+        self.colored = text
+
+    def render(self) -> Text:
+        item = self.parent
+        if self.app.ansi_color and isinstance(item, ListItem) and item.highlighted:
+            return Text(self.colored.plain)
+        return self.colored
+
+
 class SafeListView(ListView):
     def _sanitize_index(self) -> None:
         node_count = len(self._nodes)
@@ -37,6 +49,8 @@ class SafeListView(ListView):
         for position, node in enumerate(self._nodes):
             if isinstance(node, ListItem):
                 node.highlighted = position == new_index and not node.disabled
+                for label in node.query(RowLabel):
+                    label.refresh()
 
     def action_cursor_up(self) -> None:
         self._sanitize_index()
@@ -414,7 +428,7 @@ class CompetitionListScreen(Screen):
                 label_text.append("LOCAL", style="bold blue")
                 item_id = f"local-{self._render_version}-{idx}"
                 self._item_lookup[item_id] = p
-                results.mount(ListItem(Label(label_text), id=item_id))
+                results.mount(ListItem(RowLabel(label_text), id=item_id))
                 shown += 1
 
         if self.joined_competitions:
@@ -442,7 +456,7 @@ class CompetitionListScreen(Screen):
                 label_text.append(c.deadline or "n/a", style="magenta")
                 item_id = f"joined-{self._render_version}-{idx}"
                 self._item_lookup[item_id] = c
-                results.mount(ListItem(Label(label_text), id=item_id))
+                results.mount(ListItem(RowLabel(label_text), id=item_id))
                 shown += 1
 
         if self.all_competitions or self._all_has_more or self._all_loading_more:
@@ -471,7 +485,7 @@ class CompetitionListScreen(Screen):
                 label_text.append(c.deadline or "n/a", style="magenta")
                 item_id = f"all-{self._render_version}-{idx}"
                 self._item_lookup[item_id] = c
-                results.mount(ListItem(Label(label_text), id=item_id))
+                results.mount(ListItem(RowLabel(label_text), id=item_id))
                 shown += 1
 
             if self._all_loading_more:

@@ -382,6 +382,19 @@ def doctor_command(json_output: bool = False) -> int:
         required=False,
     )
 
+    from .theme import resolve_theme
+
+    _, theme_warning = resolve_theme(config.theme)
+    theme_source = {"default": "default", "config": "~/.kag_config.toml"}.get(
+        config.theme_source, config.theme_source
+    )
+    add_check(
+        "theme",
+        theme_warning is None,
+        theme_warning or f"{config.theme} ({theme_source})",
+        required=False,
+    )
+
     has_failure = any(check["status"] == "fail" for check in checks)
     has_warning = any(check["status"] == "warn" for check in checks)
 
@@ -440,6 +453,8 @@ def run_tui(initial_query: str) -> int:
 
     app = KagApp(config=Config.load(), initial_query=initial_query)
     app.run()
+    for message in app.messages:
+        print(f"kag: {message}", file=sys.stderr)
     if app.result:
         RESULT_FILE.write_text(app.result)
     return 0
