@@ -198,7 +198,7 @@ class CompetitionListScreen(Screen):
         text.append("Could not reach Kaggle or authenticate with Kaggle.\n")
         text.append("Local notebooks are still available.\n", style="green")
         text.append("Fix: check Wi-Fi/auth, then run ")
-        text.append("kag --doctor", style="bold cyan")
+        text.append("kag doctor", style="bold cyan")
         text.append(".")
         return text
 
@@ -207,7 +207,7 @@ class CompetitionListScreen(Screen):
         text.append("⚠ Could not load more competitions\n", style="bold red")
         text.append("Loaded competitions are still available.\n", style="green")
         text.append("Fix: check Wi-Fi/auth, then run ")
-        text.append("kag --doctor", style="bold cyan")
+        text.append("kag doctor", style="bold cyan")
         text.append(".")
         return text
 

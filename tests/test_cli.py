@@ -316,10 +316,8 @@ def test_login_runs_bundled_auth_login_then_verifies(
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
     monkeypatch.setattr(cli.sys, "argv", ["kag", "login"])
 
-    with pytest.raises(SystemExit) as exit_info:
-        cli.main()
+    cli.main()
 
-    assert exit_info.value.code == 0
     assert calls[0][1:6] == ["-P", "-m", "kaggle", "competitions", "list"]
     assert calls[1] == [sys.executable, "-P", "-m", "kaggle", "auth", "login"]
     assert calls[2][1:6] == ["-P", "-m", "kaggle", "competitions", "list"]
@@ -433,3 +431,105 @@ def test_bundled_cli_ignores_modules_in_the_working_directory() -> None:
     command = cli.kaggle_command("--version")
 
     assert command[:4] == [sys.executable, "-P", "-m", "kaggle"]
+
+
+@pytest.fixture
+def recorded(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[object]]:
+    calls: dict[str, list[object]] = {"tui": [], "doctor": []}
+    monkeypatch.setattr(cli, "run_tui", lambda query: calls["tui"].append(query) or 0)
+    monkeypatch.setattr(
+        cli, "doctor_command", lambda json_output=False: calls["doctor"].append(json_output) or 0
+    )
+    return calls
+
+
+@pytest.mark.parametrize(
+    ("argv", "query"),
+    [
+        ([], ""),
+        (["titanic"], "titanic"),
+        (["house", "prices"], "house prices"),
+        (["search", "new"], "new"),
+        (["search", "login"], "login"),
+        (["search"], ""),
+        (["search", "--", "-x", "files"], "-x files"),
+        (["search", "titanic", "--", "--json"], "titanic --json"),
+    ],
+)
+def test_search_and_bare_queries_open_the_picker(
+    recorded: dict[str, list[object]], argv: list[str], query: str
+) -> None:
+    assert cli.run_command(argv) == 0
+    assert recorded["tui"] == [query]
+
+
+@pytest.mark.parametrize(
+    ("argv", "json_output"),
+    [
+        (["doctor"], False),
+        (["doctor", "--json"], True),
+        (["--doctor"], False),
+        (["--doctor", "--json"], True),
+    ],
+)
+def test_doctor_command_and_alias(
+    recorded: dict[str, list[object]], argv: list[str], json_output: bool
+) -> None:
+    assert cli.run_command(argv) == 0
+    assert recorded["doctor"] == [json_output]
+    assert recorded["tui"] == []
+
+
+@pytest.mark.parametrize("argv", [["init"], ["--init"]])
+def test_init_command_and_alias(argv: list[str], capsys: pytest.CaptureFixture[str]) -> None:
+    assert cli.run_command(argv) == 0
+    assert capsys.readouterr().out.startswith("kag() {")
+
+
+@pytest.mark.parametrize(
+    ("argv", "message"),
+    [
+        (["--bogus"], "unknown option: --bogus"),
+        (["titanic", "--json"], "unknown option: --json"),
+        (["doctor", "--verbose"], "unknown doctor option: --verbose"),
+        (["init", "extra"], "init takes no arguments: extra"),
+        (["search", "titanic", "--json"], "unknown search option: --json"),
+    ],
+)
+def test_unknown_options_are_usage_errors(
+    recorded: dict[str, list[object]],
+    capsys: pytest.CaptureFixture[str],
+    argv: list[str],
+    message: str,
+) -> None:
+    assert cli.run_command(argv) == 2
+    assert f"kag: {message}" in capsys.readouterr().err
+    assert recorded["tui"] == []
+    assert recorded["doctor"] == []
+
+
+@pytest.mark.parametrize(
+    ("argv", "text"),
+    [
+        (["doctor", "--help"], "DOCTOR_HELP_TEXT"),
+        (["search", "-h"], "SEARCH_HELP_TEXT"),
+        (["init", "--help"], "INIT_HELP_TEXT"),
+        (["--help"], "HELP_TEXT"),
+    ],
+)
+def test_command_help(
+    recorded: dict[str, list[object]],
+    capsys: pytest.CaptureFixture[str],
+    argv: list[str],
+    text: str,
+) -> None:
+    assert cli.run_command(argv) == 0
+    assert capsys.readouterr().out == getattr(cli, text) + "\n"
+    assert recorded["tui"] == []
+
+
+def test_help_lists_every_command() -> None:
+    for command in cli.COMMANDS:
+        assert f"kag {command}" in cli.HELP_TEXT
+    assert "--doctor" not in cli.HELP_TEXT
+    assert "--init" not in cli.HELP_TEXT

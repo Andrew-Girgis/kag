@@ -57,14 +57,14 @@ Validate your install:
 
 ```bash
 kag --version
-kag --doctor
+kag doctor
 ```
 
 For development from this repository:
 
 ```bash
 uv sync
-uv run kag --doctor
+uv run kag doctor
 ```
 
 Maintainer release planning lives in [`docs/release.md`](docs/release.md).
@@ -92,7 +92,7 @@ This runs the Kaggle CLI bundled with kag (`kaggle auth login`) and caches crede
 ### 3. Verify your environment
 
 ```bash
-kag --doctor
+kag doctor
 ```
 
 Fix any `FAIL` rows before starting a competition workspace.
@@ -124,34 +124,35 @@ kag titanic
 Optional shell integration lets `kag` automatically `cd` into the selected project directory:
 
 ```bash
-eval "$(kag --init)"
+eval "$(kag init)"
 ```
 
 ## Quick start
 
 ```bash
-kag                  # open TUI
-kag titanic          # open TUI with initial search query
-kag new titanic      # create a workspace without the TUI
 kag login            # sign in to Kaggle (first time only)
-kag --doctor         # environment checks
-kag --version        # show installed version
-kag --help           # show CLI help
+kag                  # open the competition picker
+kag titanic          # open the picker searching for "titanic"
+kag new titanic      # create a workspace without the TUI
 ```
 
-## Usage
+## Commands
+
+Commands are words; options such as `--force` or `--json` modify them.
 
 ```bash
-kag                  # open TUI
-kag titanic          # open TUI with initial search query
-kag --doctor         # environment checks
-kag --doctor --json  # machine-readable checks
-kag --version        # show installed version
-kag --init           # print optional shell integration
-kag --help           # show CLI help
+kag [query]                  # open the picker, optionally searching
+kag search <query>           # same, and works for words like "new" or "login"
+kag new <competition>        # create a workspace without the TUI (see below)
+kag login [--force]          # sign in to Kaggle in your browser
+kag doctor [--json]          # check your environment
+kag init                     # print shell integration that cds into new projects
+kag kaggle <args>            # run the Kaggle CLI bundled with kag
+kag --help                   # help (also `kag <command> --help`)
+kag --version                # installed version
 ```
 
-`kag --help` prints usage information without requiring Kaggle CLI authentication.
+A bare query searches unless its first word is a command name; use `kag search <query>` to search for "new", "login", and so on. `kag --help` works without Kaggle authentication. The older `kag --doctor` and `kag --init` forms still work.
 
 ## For scripts and AI agents: `kag new`
 
@@ -182,7 +183,7 @@ Every project includes `AGENTS.md` (plus a `CLAUDE.md` that imports it) and `.ka
 3. If needed, choose download and editor
 4. `kag` verifies competition access before download
 5. Project is scaffolded and opened
-6. If `--init` hook is installed, your shell `cd`s into the project
+6. If the `kag init` shell hook is installed, your shell `cd`s into the project
 
 ## Search behavior
 
@@ -193,7 +194,7 @@ Search is currently case-insensitive substring filtering over competition slug/t
 Run:
 
 ```bash
-kag --doctor
+kag doctor
 ```
 
 It checks:
