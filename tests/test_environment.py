@@ -579,6 +579,7 @@ def test_built_in_install_ignores_outside_environment_overrides(
 ) -> None:
     monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", "/shared/env")
     monkeypatch.setenv("VIRTUAL_ENV", "/other/.venv")
+    monkeypatch.setenv("UV_PROJECT", "/other/project")
     monkeypatch.setenv("KEEP_ME", "1")
 
     _setup(tmp_path / "p", Config(kag_path=tmp_path), install=True)
@@ -586,6 +587,7 @@ def test_built_in_install_ignores_outside_environment_overrides(
     env = popen["calls"][0]["env"]
     assert "UV_PROJECT_ENVIRONMENT" not in env
     assert "VIRTUAL_ENV" not in env
+    assert "UV_PROJECT" not in env
     assert env["KEEP_ME"] == "1"
 
 
