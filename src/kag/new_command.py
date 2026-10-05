@@ -8,7 +8,7 @@ import threading
 from pathlib import Path
 from urllib.parse import urlparse
 
-from . import context
+from . import context, environment
 from .config import Config
 from .kaggle_api import Competition, check_competition_access
 from .kaggle_sdk import CompetitionDetails
@@ -26,7 +26,10 @@ EXIT_NEEDS_JOIN = 3
 EXIT_EXISTS = 4
 EXIT_CANCELLED = 130
 
-NEW_USAGE = "kag new <competition> [--no-download] [--no-git] [--no-venv] [--editor NAME] [--force] [--json]"
+NEW_USAGE = (
+    "kag new <competition> [--no-download] [--no-git] [--no-venv] [--install] "
+    "[--editor NAME] [--force] [--json]"
+)
 SKIPPED_DIRECTORIES = {".git", ".venv", "data"}
 SLUG_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 
@@ -40,7 +43,16 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("competition", help="Competition slug or URL, e.g. titanic.")
     parser.add_argument("--no-download", action="store_true", help="Skip downloading data.")
     parser.add_argument("--no-git", action="store_true", help="Skip git init and commit.")
-    parser.add_argument("--no-venv", action="store_true", help="Skip creating .venv.")
+    parser.add_argument(
+        "--no-venv",
+        action="store_true",
+        help="Skip the Python environment (pyproject.toml and .venv).",
+    )
+    parser.add_argument(
+        "--install",
+        action="store_true",
+        help="Install the configured packages into .venv, even when the config says to ask.",
+    )
     parser.add_argument("--editor", help="Open the project in this editor afterwards.")
     parser.add_argument(
         "--force",
@@ -204,6 +216,7 @@ def run_new(argv: list[str]) -> int:
     data_before = _data_file_count(project_dir)
     cancel = threading.Event()
     outcome: dict[str, BaseException] = {}
+    environment_results: list[environment.EnvironmentResult] = []
     done = threading.Event()
 
     def work() -> None:
@@ -216,6 +229,8 @@ def run_new(argv: list[str]) -> int:
                 progress=progress,
                 cancel=cancel,
                 details=details,
+                install_environment=True if args.install else None,
+                on_environment=environment_results.append,
             )
         except BaseException as exc:
             outcome["error"] = exc
@@ -265,15 +280,28 @@ def run_new(argv: list[str]) -> int:
         if (project_dir / context.SCHEMA_PATH).exists()
         else None,
     }
-    return finish(
-        {
-            "status": "updated" if existed else "created",
-            "message": "Workspace ready.",
-            "files": files,
-            "added": added,
-            "data_files_added": _data_file_count(project_dir) - data_before,
-            "warnings": warnings,
-            "next_steps": [f"cd {project_dir}", "Read AGENTS.md"],
-        },
-        EXIT_OK,
-    )
+    next_steps = [f"cd {project_dir}", "Read AGENTS.md"]
+    result: dict = {
+        "status": "updated" if existed else "created",
+        "message": "Workspace ready.",
+        "files": files,
+        "added": added,
+        "data_files_added": _data_file_count(project_dir) - data_before,
+    }
+    if environment_results:
+        env_result = environment_results[-1]
+        result["environment"] = env_result.to_json()
+        if env_result.status == "not_installed":
+            next_steps.append(
+                f"Ask the user before installing Python packages: {env_result.install_command}"
+            )
+        elif env_result.status == "user_managed":
+            next_steps.append(
+                "The project has its own pyproject.toml; ask the user before running "
+                f"{env_result.install_command}"
+            )
+        elif env_result.status == "failed":
+            warnings.append(environment.follow_up(env_result, project_dir) or "")
+    result["warnings"] = warnings
+    result["next_steps"] = next_steps
+    return finish(result, EXIT_OK)

@@ -9,6 +9,7 @@ from textual.screen import Screen
 from textual.widgets import LoadingIndicator, Static
 
 from ..config import Config
+from ..environment import EnvironmentResult
 from ..kaggle_api import Competition
 from ..project import ProjectCreationCancelled, ProjectCreationError, create_project
 
@@ -33,11 +34,13 @@ class CreatingProjectScreen(Screen):
             project_path: str | None = None,
             error: str | None = None,
             cancelled: bool = False,
+            environment: EnvironmentResult | None = None,
         ):
             self.competition = competition
             self.project_path = project_path
             self.error = error
             self.cancelled = cancelled
+            self.environment = environment
 
     def __init__(
         self,
@@ -45,6 +48,7 @@ class CreatingProjectScreen(Screen):
         competition: Competition,
         download_files: bool,
         editor: str | None,
+        install_environment: bool | None = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -52,6 +56,8 @@ class CreatingProjectScreen(Screen):
         self.competition = competition
         self.download_files = download_files
         self.editor = editor
+        self.install_environment = install_environment
+        self._environment: EnvironmentResult | None = None
         self.status = "Starting..."
         self._cancel = threading.Event()
         self._started_at = 0.0
@@ -91,6 +97,9 @@ class CreatingProjectScreen(Screen):
         except Exception:
             return
 
+    def _set_environment(self, result: EnvironmentResult) -> None:
+        self._environment = result
+
     def on_unmount(self) -> None:
         self._cancel.set()
 
@@ -104,8 +113,12 @@ class CreatingProjectScreen(Screen):
                 editor=self.editor,
                 progress=self._report,
                 cancel=self._cancel,
+                install_environment=self.install_environment,
+                on_environment=self._set_environment,
             )
-            result = CreatingProjectScreen.Finished(self.competition, project_path=project_path)
+            result = CreatingProjectScreen.Finished(
+                self.competition, project_path=project_path, environment=self._environment
+            )
         except ProjectCreationCancelled:
             result = CreatingProjectScreen.Finished(self.competition, cancelled=True)
         except ProjectCreationError as exc:

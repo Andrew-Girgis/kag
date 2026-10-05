@@ -432,7 +432,7 @@ def _submission_type(competition: dict) -> str:
     return "CSV file upload"
 
 
-def render_agents_md(manifest: dict) -> str:
+def render_agents_md(manifest: dict, has_pyproject: bool = False) -> str:
     competition = manifest["competition"]
     submission = manifest["submission"]
     slug = competition["slug"]
@@ -467,6 +467,8 @@ def render_agents_md(manifest: dict) -> str:
             "- `.kag/competition.json`: machine-readable competition metadata",
         ]
     )
+    if has_pyproject:
+        lines.append("- `pyproject.toml`: Python dependencies for the project's `.venv`")
 
     lines.extend(["", "## Submission format", ""])
     if submission["template"]:
@@ -492,6 +494,11 @@ def render_agents_md(manifest: dict) -> str:
             "- Treat files in `data/` as read-only; write derived data and models elsewhere.",
         ]
     )
+    if has_pyproject:
+        lines.append(
+            "- Ask the user before installing packages (`uv sync`, `uv add`); installing "
+            "downloads and runs code from PyPI."
+        )
     if competition["submissions_disabled"]:
         lines.append(
             "- Submissions are disabled for this competition; Kaggle will not accept new "

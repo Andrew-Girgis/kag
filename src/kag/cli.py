@@ -440,6 +440,8 @@ def run_tui(initial_query: str) -> int:
 
     app = KagApp(config=Config.load(), initial_query=initial_query)
     app.run()
+    for message in app.messages:
+        print(f"kag: {message}", file=sys.stderr)
     if app.result:
         RESULT_FILE.write_text(app.result)
     return 0
