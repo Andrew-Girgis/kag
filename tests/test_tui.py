@@ -52,7 +52,7 @@ def test_editor_selected_pushes_project_creation_screen(tmp_path) -> None:
         reward="",
         team_count="0",
     )
-    app = KagApp(Config(kag_path=tmp_path))
+    app = KagApp(Config(kag_path=tmp_path, auto_venv=False))
     pushed_screens: list[object] = []
     app.push_screen = lambda screen, callback=None: pushed_screens.append(screen)  # type: ignore[method-assign]
 

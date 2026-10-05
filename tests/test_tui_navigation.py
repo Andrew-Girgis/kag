@@ -73,7 +73,7 @@ async def test_escape_from_download_prompt_returns_to_picker_with_search(
     tmp_path: Path,
     stub_kaggle: None,
 ) -> None:
-    app = KagApp(Config(kag_path=tmp_path), initial_query="tita")
+    app = KagApp(Config(kag_path=tmp_path, auto_venv=False), initial_query="tita")
 
     async with app.run_test() as pilot:
         await pilot.pause(0.3)
@@ -117,7 +117,7 @@ async def test_escape_from_editor_select_returns_to_picker(
     tmp_path: Path,
     stub_kaggle: None,
 ) -> None:
-    app = KagApp(Config(kag_path=tmp_path), initial_query="tita")
+    app = KagApp(Config(kag_path=tmp_path, auto_venv=False), initial_query="tita")
 
     async with app.run_test() as pilot:
         await pilot.pause(0.3)
@@ -159,7 +159,7 @@ def _make_existing_project(tmp_path: Path) -> Path:
 @pytest.mark.asyncio
 async def test_existing_project_open_exits_into_folder(tmp_path: Path, stub_kaggle: None) -> None:
     project_dir = _make_existing_project(tmp_path)
-    app = KagApp(Config(kag_path=tmp_path), initial_query="tita")
+    app = KagApp(Config(kag_path=tmp_path, auto_venv=False), initial_query="tita")
 
     async with app.run_test() as pilot:
         await pilot.pause(0.3)
@@ -184,7 +184,7 @@ async def test_existing_project_fill_continues_to_download_prompt(
     stub_kaggle: None,
 ) -> None:
     _make_existing_project(tmp_path)
-    app = KagApp(Config(kag_path=tmp_path), initial_query="tita")
+    app = KagApp(Config(kag_path=tmp_path, auto_venv=False), initial_query="tita")
 
     async with app.run_test() as pilot:
         await pilot.pause(0.3)
@@ -208,7 +208,7 @@ async def test_escape_from_existing_project_returns_to_picker(
     stub_kaggle: None,
 ) -> None:
     _make_existing_project(tmp_path)
-    app = KagApp(Config(kag_path=tmp_path), initial_query="tita")
+    app = KagApp(Config(kag_path=tmp_path, auto_venv=False), initial_query="tita")
 
     async with app.run_test() as pilot:
         await pilot.pause(0.3)
@@ -309,7 +309,7 @@ async def test_download_confirm_checks_access_in_background_when_listing_failed(
         lambda slug: FileListResult(False, details="403 Forbidden"),
     )
     monkeypatch.setattr(confirm_download, "check_competition_access", record_check)
-    app = KagApp(Config(kag_path=tmp_path), initial_query="tita")
+    app = KagApp(Config(kag_path=tmp_path, auto_venv=False), initial_query="tita")
 
     async with app.run_test() as pilot:
         await pilot.pause(0.3)
@@ -337,7 +337,7 @@ async def test_download_confirm_reuses_successful_file_listing(
         raise AssertionError("listing already confirmed access")
 
     monkeypatch.setattr(confirm_download, "check_competition_access", fail_if_called)
-    app = KagApp(Config(kag_path=tmp_path), initial_query="tita")
+    app = KagApp(Config(kag_path=tmp_path, auto_venv=False), initial_query="tita")
 
     async with app.run_test() as pilot:
         await pilot.pause(0.3)
@@ -386,7 +386,7 @@ async def test_project_creation_runs_in_background_and_exits_into_project(
         return str(tmp_path / "titanic")
 
     monkeypatch.setattr(creating_project, "create_project", fake_create_project)
-    app = KagApp(Config(kag_path=tmp_path), initial_query="tita")
+    app = KagApp(Config(kag_path=tmp_path, auto_venv=False), initial_query="tita")
     original_set_status = creating_project.CreatingProjectScreen._set_status
 
     def record_status(self: creating_project.CreatingProjectScreen, message: str) -> None:
@@ -421,7 +421,7 @@ async def test_escape_cancels_project_creation_and_returns_to_picker(
         raise ProjectCreationCancelled("Project setup cancelled")
 
     monkeypatch.setattr(creating_project, "create_project", slow_create_project)
-    app = KagApp(Config(kag_path=tmp_path), initial_query="tita")
+    app = KagApp(Config(kag_path=tmp_path, auto_venv=False), initial_query="tita")
 
     async with app.run_test() as pilot:
         await _reach_editor_select(app, pilot)
@@ -448,7 +448,7 @@ async def test_project_creation_error_returns_to_download_prompt(
         raise OSError("No space left on device")
 
     monkeypatch.setattr(creating_project, "create_project", broken_create_project)
-    app = KagApp(Config(kag_path=tmp_path), initial_query="tita")
+    app = KagApp(Config(kag_path=tmp_path, auto_venv=False), initial_query="tita")
 
     async with app.run_test() as pilot:
         await _reach_editor_select(app, pilot)
@@ -477,7 +477,7 @@ async def test_quitting_during_project_creation_signals_cancel(
         raise ProjectCreationCancelled("Project setup cancelled")
 
     monkeypatch.setattr(creating_project, "create_project", slow_create_project)
-    app = KagApp(Config(kag_path=tmp_path), initial_query="tita")
+    app = KagApp(Config(kag_path=tmp_path, auto_venv=False), initial_query="tita")
 
     async with app.run_test() as pilot:
         await _reach_editor_select(app, pilot)
@@ -489,3 +489,100 @@ async def test_quitting_during_project_creation_signals_cancel(
         await pilot.pause(0.3)
 
     assert saw_cancel.wait(timeout=2)
+
+
+def _record_creation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[dict]:
+    from kag.environment import EnvironmentResult
+
+    calls: list[dict] = []
+
+    def fake_create_project(**kwargs: object) -> str:
+        calls.append(kwargs)
+        install = kwargs["install_environment"]
+        status = "installed" if install else "not_installed"
+        kwargs["on_environment"](EnvironmentResult(status, ["pandas"], "uv sync"))  # type: ignore[operator]
+        return str(tmp_path / "titanic")
+
+    monkeypatch.setattr(creating_project, "create_project", fake_create_project)
+    return calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("keys", "install"),
+    [(("n",), False), (("enter",), False), (("y",), True), (("down", "enter"), True)],
+)
+async def test_install_prompt_asks_before_installing_packages(
+    tmp_path: Path,
+    stub_kaggle: None,
+    monkeypatch: pytest.MonkeyPatch,
+    keys: tuple[str, ...],
+    install: bool,
+) -> None:
+    from kag.screens.install_packages import InstallPackagesScreen
+
+    calls = _record_creation(monkeypatch, tmp_path)
+    app = KagApp(Config(kag_path=tmp_path), initial_query="tita")
+
+    async with app.run_test() as pilot:
+        await _reach_editor_select(app, pilot)
+        _select_terminal_only(app)
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, InstallPackagesScreen)
+        prompt = str(app.screen.query_one("#install-packages").render())
+        assert "pandas" in prompt and "scikit-learn" in prompt
+        await pilot.press(*keys)
+        await pilot.pause(0.5)
+
+    assert calls[0]["install_environment"] is install
+    assert app.result == str(tmp_path / "titanic")
+    if install:
+        assert app.messages == []
+    else:
+        assert app.messages == [
+            f"Python packages were not installed. To install them: cd {tmp_path / 'titanic'} "
+            "&& uv sync"
+        ]
+
+
+@pytest.mark.asyncio
+async def test_escape_from_install_prompt_returns_to_picker(
+    tmp_path: Path,
+    stub_kaggle: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _record_creation(monkeypatch, tmp_path)
+    app = KagApp(Config(kag_path=tmp_path), initial_query="tita")
+
+    async with app.run_test() as pilot:
+        await _reach_editor_select(app, pilot)
+        _select_terminal_only(app)
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+        await pilot.press("escape")
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, CompetitionListScreen)
+
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_install_prompt_is_skipped_when_config_decides(
+    tmp_path: Path,
+    stub_kaggle: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from kag.config import EnvironmentConfig
+
+    calls = _record_creation(monkeypatch, tmp_path)
+    config = Config(kag_path=tmp_path, environment=EnvironmentConfig(install="always"))
+    app = KagApp(config, initial_query="tita")
+
+    async with app.run_test() as pilot:
+        await _reach_editor_select(app, pilot)
+        _select_terminal_only(app)
+        await pilot.press("enter")
+        await pilot.pause(0.5)
+
+    assert calls[0]["install_environment"] is None

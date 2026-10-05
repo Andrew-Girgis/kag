@@ -26,7 +26,7 @@ Planned recording file path: `docs/demo.cast`
   - `notes.md` (overview, evaluation, data description, rules, and top notebooks from Kaggle)
   - `AGENTS.md` and `CLAUDE.md` so coding agents start with the metric, submission format, and limits
   - `.kag/competition.json` (machine-readable competition metadata)
-  - `.venv` (optional)
+  - `pyproject.toml` listing the Python packages, and a `.venv` with them installed once you agree (see [Python environment](#python-environment))
   - `git init` (optional)
 - Checks competition access before download and opens browser tabs for `overview` + `rules` when acceptance is needed.
 - Fills `notes.md` from Kaggle's official competition pages (`Overview`, `Evaluation`, `Data`, `Code`, `Rules`).
@@ -110,9 +110,23 @@ Optional persistent config lives at `~/.kag_config.toml`:
 ```toml
 kag_path = "/Users/you/Kaggle"
 default_editor = "code"
-auto_venv = true
 auto_git = true
 ```
+
+#### Python environment
+
+Every new project gets a `pyproject.toml` listing its Python packages. Installing them downloads and runs code from PyPI, so by default kag shows you the list and asks first (the default answer is No). Every part of this can be changed in the `[environment]` section of `~/.kag_config.toml`; these are the defaults:
+
+```toml
+[environment]
+create = true          # false: no pyproject.toml or .venv (the older auto_venv = false also works)
+install = "ask"        # "ask" shows the list and asks y/N; "always" installs; "never" only writes pyproject.toml
+python = ""            # e.g. "3.12"; empty uses uv's default
+packages = ["pandas", "numpy", "matplotlib", "seaborn", "scikit-learn", "ipykernel"]
+command = []           # replace the install step, e.g. ["pixi", "install"]
+```
+
+kag installs with `uv sync`, or with `python -m venv` plus `pip` if `uv` isn't on your PATH. Output goes to `.kag/logs/environment.log`. If you skip the install, or it fails, kag still creates the project and tells you the command to run later. An existing `pyproject.toml` or `.venv` is never replaced.
 
 ### 5. Start using kag
 
@@ -164,7 +178,9 @@ kag new titanic --json --no-download    # metadata, notes, and agent files only
 kag new titanic --json --force          # existing folder: add missing files (never overwrites)
 ```
 
-Options: `--no-download`, `--no-git`, `--no-venv`, `--editor NAME`, `--force`, `--json`. Progress goes to stderr; the result goes to stdout.
+Options: `--no-download`, `--no-git`, `--no-venv`, `--install`, `--editor NAME`, `--force`, `--json`. Progress goes to stderr; the result goes to stdout.
+
+`kag new` can't ask before installing packages. With the default `install = "ask"`, it writes `pyproject.toml`, skips the install, and reports `"environment": {"status": "not_installed", "packages": [...], "install_command": "uv sync"}` so the agent can ask you first. `--install` agrees for that run, and `install = "always"` agrees every time.
 
 | Status | Exit code | Meaning |
 |---|---|---|

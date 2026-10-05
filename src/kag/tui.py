@@ -12,6 +12,8 @@ from .screens.editor_select import EditorSelectScreen
 from .screens.existing_project import ExistingProjectScreen
 from .screens.confirm_download import ConfirmDownloadScreen
 from .screens.creating_project import CreatingProjectScreen
+from .screens.install_packages import InstallPackagesScreen
+from .environment import follow_up, needs_prompt
 from .project import existing_project_dir
 from .update_check import UpdateNotice, check_for_update
 
@@ -65,6 +67,19 @@ class KagApp(App):
     #creating-elapsed, #creating-hint {
         color: $text-muted;
     }
+    #install-dialog {
+        padding: 1 2;
+    }
+    #install-title {
+        text-style: bold;
+    }
+    #install-packages, #install-command {
+        padding: 1 0 0 0;
+    }
+    #install-hint {
+        color: $text-muted;
+        padding: 1 0;
+    }
     #existing-title {
         text-style: bold;
     }
@@ -102,6 +117,7 @@ class KagApp(App):
         self.config = config
         self.initial_query = initial_query
         self.result: str | None = None
+        self.messages: list[str] = []
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -199,12 +215,41 @@ class KagApp(App):
     def _on_editor_selected(self, result: EditorSelectScreen.Selected | None) -> None:
         if result is None:
             return
+        project_dir = self.config.kag_path / result.competition.slug
+        if needs_prompt(self.config, project_dir):
+            self.push_screen(
+                InstallPackagesScreen(
+                    self.config,
+                    result.competition,
+                    download_files=result.download_files,
+                    editor=result.editor,
+                ),
+                self._on_install_chosen,
+            )
+            return
+        self._create_project(result.competition, result.download_files, result.editor, None)
+
+    def _on_install_chosen(self, result: InstallPackagesScreen.Chosen | None) -> None:
+        if result is None:
+            return
+        self._create_project(
+            result.competition, result.download_files, result.editor, result.install
+        )
+
+    def _create_project(
+        self,
+        competition: Competition,
+        download_files: bool,
+        editor: str | None,
+        install: bool | None,
+    ) -> None:
         self.push_screen(
             CreatingProjectScreen(
                 self.config,
-                result.competition,
-                download_files=result.download_files,
-                editor=result.editor,
+                competition,
+                download_files=download_files,
+                editor=editor,
+                install_environment=install,
             ),
             self._on_project_created,
         )
@@ -225,4 +270,8 @@ class KagApp(App):
             return
 
         self.result = result.project_path
+        if result.environment is not None:
+            message = follow_up(result.environment, self.config.kag_path / result.competition.slug)
+            if message:
+                self.messages.append(message)
         self.exit()

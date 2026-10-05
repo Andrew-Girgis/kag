@@ -3,7 +3,6 @@ import keyword
 import re
 import shutil
 import subprocess
-import sys
 import threading
 import unicodedata
 import zipfile
@@ -19,7 +18,8 @@ from .kaggle_api import (
     get_competition_files,
     list_competition_files,
 )
-from . import context, kaggle_sdk
+from . import context, environment, kaggle_sdk
+from .environment import EnvironmentResult
 from .kaggle_sdk import CompetitionDetails
 from .notes_fetcher import fetch_competition_markdown_sections
 
@@ -423,7 +423,8 @@ def _write_agent_context(
     manifest = context.build_manifest(competition, details, data_profile, notebook_name)
     title = details.title if details else competition.title
     previous = context.generated_hashes(project_dir)
-    outputs = {"AGENTS.md": context.render_agents_md(manifest)}
+    has_pyproject = (project_dir / environment.PYPROJECT_NAME).exists()
+    outputs = {"AGENTS.md": context.render_agents_md(manifest, has_pyproject)}
     if data_profile.downloaded:
         outputs[context.SCHEMA_PATH.as_posix()] = context.render_schema_md(title, data_profile)
     owned: dict[str, str] = {}
@@ -445,6 +446,8 @@ def create_project(
     progress: Callable[[str], None] | None = None,
     cancel: threading.Event | None = None,
     details: CompetitionDetails | None = None,
+    install_environment: bool | None = None,
+    on_environment: Callable[[EnvironmentResult], None] | None = None,
 ) -> str | None:
     def report(message: str) -> None:
         if progress is not None:
@@ -539,6 +542,8 @@ def create_project(
         )
         _write_if_missing(project_dir / "notes.md", notes)
 
+        environment.write_pyproject(project_dir, competition.slug, config)
+
         check_cancel()
         report("Writing agent context files...")
         _write_agent_context(project_dir, competition, details, files, notebook_path.name, cancel)
@@ -567,17 +572,16 @@ def create_project(
             except Exception:
                 pass
 
-        if config.auto_venv and not (project_dir / ".venv").exists():
-            report("Creating virtual environment...")
-            try:
-                subprocess.run(
-                    [sys.executable, "-m", "venv", ".venv"],
-                    cwd=str(project_dir),
-                    capture_output=True,
-                    timeout=30,
-                )
-            except Exception:
-                pass
+        check_cancel()
+        environment_result = environment.setup_environment(
+            project_dir,
+            config,
+            environment.wants_install(config, install_environment),
+            check_cancel,
+            report,
+        )
+        if on_environment is not None:
+            on_environment(environment_result)
 
         check_cancel()
         if editor and shutil.which(editor):

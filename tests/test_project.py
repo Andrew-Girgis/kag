@@ -700,7 +700,6 @@ def test_create_project_reports_progress_for_each_step(
         "Writing notebook and notes...",
         "Writing agent context files...",
         "Setting up git...",
-        "Creating virtual environment...",
     ]
 
 
