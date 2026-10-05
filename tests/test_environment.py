@@ -539,3 +539,45 @@ def test_pip_fallback_refuses_an_unreadable_pyproject(
 
     assert result.status == "failed"
     assert popen["calls"] == []
+
+
+def test_generated_pyproject_is_its_own_uv_workspace() -> None:
+    data = tomllib.loads(environment.render_pyproject("titanic", EnvironmentConfig()))
+
+    assert data["tool"]["uv"]["workspace"] == {"members": []}
+
+
+def test_included_dependency_groups_are_expanded(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "p"\ndependencies = []\n'
+        "[dependency-groups]\n"
+        'dev = ["ruff", { include-group = "test" }]\n'
+        'test = ["pytest", { include-group = "dev" }]\n'
+    )
+
+    assert environment.planned_packages(tmp_path, Config(kag_path=tmp_path)) == ["ruff", "pytest"]
+
+
+def test_create_project_installs_before_the_initial_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, popen: dict
+) -> None:
+    _stub_sources(monkeypatch)
+    order: list[str] = []
+
+    def record(cmd: list[str], *args: object, **kwargs: object) -> SimpleNamespace:
+        if cmd[:2] == ["git", "add"]:
+            order.append("git add")
+        return SimpleNamespace(returncode=0, stdout="")
+
+    original = environment.subprocess.Popen
+
+    def recording_popen(cmd: list[str], **kwargs: object) -> object:
+        order.append("install")
+        return original(cmd, **kwargs)
+
+    monkeypatch.setattr(project.subprocess, "run", record)
+    monkeypatch.setattr(environment.subprocess, "Popen", recording_popen)
+
+    _create(tmp_path, Config(kag_path=tmp_path, auto_git=True), install_environment=True)
+
+    assert order == ["install", "git add"]
