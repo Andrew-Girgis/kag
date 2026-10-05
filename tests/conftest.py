@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from collections.abc import Iterator, Sequence
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -12,8 +13,11 @@ from kag import kaggle_sdk
 
 def _is_kaggle_command(cmd: Sequence[str] | str) -> bool:
     if isinstance(cmd, str):
-        return cmd.startswith("kaggle ")
-    return bool(cmd) and cmd[0] == "kaggle"
+        return cmd.startswith("kaggle ") or " -m kaggle" in cmd
+    parts = list(cmd)
+    if not parts:
+        return False
+    return Path(str(parts[0])).name == "kaggle" or parts[1:3] == ["-m", "kaggle"]
 
 
 @pytest.fixture(autouse=True)

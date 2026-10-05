@@ -1,6 +1,8 @@
 import csv
+import importlib.util
 import io
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -18,6 +20,17 @@ FILE_LIST_PAGE_SIZE = 200
 DOWNLOAD_POLL_SECONDS = 0.5
 DOWNLOAD_CANCELLED = "Download cancelled"
 MAX_FILE_LIST_PAGES = 50
+
+
+KAGGLE_CLI_MISSING = "The Kaggle CLI bundled with kag is missing; reinstall kag"
+
+
+def kaggle_command(*args: str) -> list[str]:
+    return [sys.executable, "-m", "kaggle", *args]
+
+
+def bundled_kaggle_available() -> bool:
+    return importlib.util.find_spec("kaggle") is not None
 
 
 class KaggleFetchError(RuntimeError):
@@ -158,16 +171,9 @@ def _list_competitions_page_cli(
     page: int,
     page_size: int,
 ) -> tuple[list[Competition], bool]:
-    cmd = [
-        "kaggle",
-        "competitions",
-        "list",
-        "--csv",
-        "--page-size",
-        str(page_size),
-        "--page",
-        str(page),
-    ]
+    cmd = kaggle_command(
+        "competitions", "list", "--csv", "--page-size", str(page_size), "--page", str(page)
+    )
     if group:
         cmd.extend(["--group", group])
     if search:
@@ -181,7 +187,7 @@ def _list_competitions_page_cli(
                 details = details.splitlines()[0]
             raise KaggleFetchError(details or "Kaggle competitions could not be loaded")
     except FileNotFoundError as exc:
-        raise KaggleFetchError("kaggle CLI not found") from exc
+        raise KaggleFetchError(KAGGLE_CLI_MISSING) from exc
     except subprocess.TimeoutExpired as exc:
         raise KaggleFetchError("Kaggle competitions request timed out") from exc
 
@@ -239,15 +245,9 @@ def list_competition_files(slug: str) -> FileListResult:
     seen_tokens: set[str] = set()
 
     for _ in range(MAX_FILE_LIST_PAGES):
-        cmd = [
-            "kaggle",
-            "competitions",
-            "files",
-            "-v",
-            slug,
-            "--page-size",
-            str(FILE_LIST_PAGE_SIZE),
-        ]
+        cmd = kaggle_command(
+            "competitions", "files", "-v", slug, "--page-size", str(FILE_LIST_PAGE_SIZE)
+        )
         if page_token:
             cmd.extend(["--page-token", page_token])
         try:
@@ -260,7 +260,7 @@ def list_competition_files(slug: str) -> FileListResult:
         except subprocess.TimeoutExpired:
             return FileListResult(False, details="Kaggle files request timed out")
         except FileNotFoundError:
-            return FileListResult(False, details="kaggle CLI not found")
+            return FileListResult(False, details=KAGGLE_CLI_MISSING)
 
         reader = csv.DictReader(io.StringIO(_csv_payload(result.stdout, "name,")))
         if reader.fieldnames is None or "name" not in reader.fieldnames:
@@ -318,7 +318,7 @@ def download_competition(
     progress: Callable[[int], None] | None = None,
     cancel: threading.Event | None = None,
 ) -> DownloadResult:
-    cmd = ["kaggle", "competitions", "download", "-q", slug, "-p", path]
+    cmd = kaggle_command("competitions", "download", "-q", slug, "-p", path)
     target = Path(path)
     if cancel is not None and cancel.is_set():
         return DownloadResult(False, DOWNLOAD_CANCELLED, cancelled=True)
@@ -327,7 +327,7 @@ def download_competition(
         try:
             process = subprocess.Popen(cmd, stdout=stdout_file, stderr=stderr_file)
         except FileNotFoundError:
-            return DownloadResult(False, "kaggle CLI not found")
+            return DownloadResult(False, KAGGLE_CLI_MISSING)
 
         try:
             while True:
@@ -362,7 +362,7 @@ def download_competition(
 
 
 def check_competition_access(slug: str) -> tuple[bool, str]:
-    cmd = ["kaggle", "competitions", "files", "-v", slug]
+    cmd = kaggle_command("competitions", "files", "-v", slug)
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -407,7 +407,7 @@ def ensure_competition_access(
 
 
 def get_competition_description(slug: str) -> str:
-    cmd = ["kaggle", "competitions", "list", "--csv", "-s", slug]
+    cmd = kaggle_command("competitions", "list", "--csv", "-s", slug)
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         if result.returncode != 0:

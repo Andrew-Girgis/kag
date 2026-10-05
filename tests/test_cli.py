@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -106,7 +107,7 @@ def test_auth_status_reports_missing_credentials(kaggle_home: Path) -> None:
     ok, details = cli._kaggle_auth_status()
 
     assert ok is False
-    assert "kaggle auth login" in details
+    assert "kag login" in details
 
 
 def test_auth_status_rejects_empty_kaggle_json(kaggle_home: Path) -> None:
@@ -222,10 +223,20 @@ def test_check_kaggle_cli_does_not_block_on_missing_static_credentials(
     assert cli.check_kaggle_cli() is None
 
 
-def test_check_kaggle_cli_reports_missing_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_check_kaggle_cli_reports_missing_bundled_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "bundled_kaggle_available", lambda: False)
+
+    assert "reinstall kag" in (cli.check_kaggle_cli() or "")
+
+
+def test_check_kaggle_cli_does_not_need_kaggle_on_path(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli.shutil, "which", lambda cmd: None)
 
-    assert "kaggle CLI not found" in (cli.check_kaggle_cli() or "")
+    assert cli.check_kaggle_cli() is None
+
+
+def test_kaggle_commands_use_the_bundled_cli() -> None:
+    assert cli.kaggle_command("auth", "login") == [sys.executable, "-m", "kaggle", "auth", "login"]
 
 
 def test_doctor_shows_kaggle_auth_error_from_stdout(
@@ -235,7 +246,7 @@ def test_doctor_shows_kaggle_auth_error_from_stdout(
     completed_process: type[SimpleNamespace],
 ) -> None:
     def fake_run(cmd: list[str], *args: object, **kwargs: object) -> object:
-        if cmd[:2] == ["kaggle", "--version"]:
+        if cmd[1:] == ["-m", "kaggle", "--version"]:
             return completed_process(returncode=0, stdout="Kaggle CLI 2.2.4\n", stderr="")
         return completed_process(
             returncode=1,
@@ -253,4 +264,95 @@ def test_doctor_shows_kaggle_auth_error_from_stdout(
     probe = checks["kaggle auth probe"]
     assert probe["ok"] is False
     assert probe["details"].startswith("Authentication required to call the Kaggle API.")
-    assert "kaggle auth login" in probe["details"]
+    assert "kag login" in probe["details"]
+
+
+def test_doctor_reports_bundled_cli(
+    kaggle_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    completed_process: type[SimpleNamespace],
+) -> None:
+    def fake_run(cmd: list[str], *args: object, **kwargs: object) -> object:
+        if cmd[1:] == ["-m", "kaggle", "--version"]:
+            return completed_process(returncode=0, stdout="Kaggle CLI 2.2.4\n", stderr="")
+        return completed_process(returncode=0, stdout="ref,deadline\n", stderr="")
+
+    monkeypatch.setattr(cli.shutil, "which", lambda cmd: None)
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    cli.doctor_command(json_output=True)
+
+    checks = {check["name"]: check for check in json.loads(capsys.readouterr().out)["checks"]}
+    assert checks["kaggle CLI"] == {
+        "name": "kaggle CLI",
+        "ok": True,
+        "details": "bundled with kag (Kaggle CLI 2.2.4)",
+    }
+    assert checks["kaggle auth probe"]["ok"] is True
+
+
+def test_login_runs_bundled_auth_login_then_verifies(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    completed_process: type[SimpleNamespace],
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], *args: object, **kwargs: object) -> object:
+        calls.append(cmd)
+        return completed_process(returncode=0, stdout="ref,deadline\n", stderr="")
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(cli.sys, "argv", ["kag", "login"])
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main()
+
+    assert exit_info.value.code == 0
+    assert calls[0] == [sys.executable, "-m", "kaggle", "auth", "login"]
+    assert calls[1][1:5] == ["-m", "kaggle", "competitions", "list"]
+    assert "Logged in. kag can reach Kaggle." in capsys.readouterr().out
+
+
+def test_login_reports_cancelled_login(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    completed_process: type[SimpleNamespace],
+) -> None:
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda cmd, *args, **kwargs: completed_process(returncode=2, stdout="", stderr=""),
+    )
+
+    assert cli.login_command([]) == 2
+    assert "did not complete" in capsys.readouterr().err
+
+
+def test_login_reports_rejected_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    completed_process: type[SimpleNamespace],
+) -> None:
+    def fake_run(cmd: list[str], *args: object, **kwargs: object) -> object:
+        if "login" in cmd:
+            return completed_process(returncode=0, stdout="", stderr="")
+        return completed_process(returncode=1, stdout="401 - Unauthorized", stderr="")
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    assert cli.login_command([]) == 1
+    assert "401 - Unauthorized" in capsys.readouterr().err
+
+
+def test_login_help_does_not_run_kaggle(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fail_if_called(*args: object, **kwargs: object) -> object:
+        raise AssertionError("help should not run kaggle")
+
+    monkeypatch.setattr(cli.subprocess, "run", fail_if_called)
+
+    assert cli.login_command(["--help"]) == 0
+    assert capsys.readouterr().out == cli.LOGIN_HELP_TEXT + "\n"

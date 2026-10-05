@@ -77,19 +77,17 @@ Maintainer release planning lives in [`docs/release.md`](docs/release.md).
 uv tool install kag
 ```
 
-### 2. Install and authenticate Kaggle CLI
+### 2. Sign in to Kaggle
 
-- Python 3.11+
-- [Kaggle CLI](https://github.com/Kaggle/kaggle-cli) 2.x installed and authenticated. kag uses whatever login the Kaggle CLI uses:
-  - Recommended: `kaggle auth login` (browser sign-in, credentials cached in `~/.kaggle/credentials.json`)
-  - API token: `KAGGLE_API_TOKEN`, or the token saved to `~/.kaggle/access_token`
-  - Legacy: `KAGGLE_USERNAME` + `KAGGLE_KEY`, or `~/.kaggle/kaggle.json` containing `username` and `key`
+kag installs the Kaggle CLI and library for you (Python 3.11+); there is nothing else to install. Sign in once in your browser:
 
 ```bash
-uv tool install kaggle
-kaggle auth login
-kaggle --version
+kag login
 ```
+
+This runs the Kaggle CLI bundled with kag (`kaggle auth login`) and caches credentials in `~/.kaggle/`. Other ways to authenticate also work:
+- API token: `KAGGLE_API_TOKEN`, or the token saved to `~/.kaggle/access_token`
+- Legacy: `KAGGLE_USERNAME` + `KAGGLE_KEY`, or `~/.kaggle/kaggle.json` containing `username` and `key`
 
 ### 3. Verify your environment
 
@@ -135,6 +133,7 @@ eval "$(kag --init)"
 kag                  # open TUI
 kag titanic          # open TUI with initial search query
 kag new titanic      # create a workspace without the TUI
+kag login            # sign in to Kaggle (first time only)
 kag --doctor         # environment checks
 kag --version        # show installed version
 kag --help           # show CLI help
@@ -200,7 +199,7 @@ kag --doctor
 It checks:
 
 - `kag` on PATH
-- `kaggle` CLI + auth status
+- bundled Kaggle CLI + auth status
 - API probe (`kaggle competitions list --page-size 1`)
 - shell hook presence
 - writable directories

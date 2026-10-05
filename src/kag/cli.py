@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 from . import __version__, kaggle_sdk
+from .kaggle_api import KAGGLE_CLI_MISSING, bundled_kaggle_available, kaggle_command
 from .config import Config
 
 
@@ -14,6 +15,7 @@ RESULT_FILE = Path.home() / ".kag_result"
 HELP_TEXT = """Usage:
   kag [query]
   kag new <competition> [options]
+  kag login
   kag --init
   kag --doctor [--json]
   kag --version
@@ -27,6 +29,8 @@ Arguments:
 Commands:
   new               Create a workspace without the TUI (for scripts and agents).
                     Run `kag new --help` for options.
+  login             Sign in to Kaggle in your browser (uses the Kaggle CLI bundled
+                    with kag).
 
 Options:
   --init            Print optional shell integration for auto-cd.
@@ -36,7 +40,15 @@ Options:
   --help, -h        Show this help message."""
 
 
-KAGGLE_LOGIN_HINT = "run `kaggle auth login` or set KAGGLE_API_TOKEN"
+KAGGLE_LOGIN_HINT = "run `kag login` or set KAGGLE_API_TOKEN"
+
+
+LOGIN_HELP_TEXT = """Usage:
+  kag login
+
+Sign in to Kaggle in your browser using the Kaggle CLI bundled with kag
+(`kaggle auth login`). Credentials are cached in ~/.kaggle/ and shared with the
+kaggle command. Alternatively set KAGGLE_API_TOKEN."""
 
 
 def _kaggle_config_dir() -> Path:
@@ -114,10 +126,49 @@ def _first_output_line(*outputs: str | None) -> str:
 
 
 def check_kaggle_cli() -> str | None:
-    kaggle_path = shutil.which("kaggle")
-    if not kaggle_path:
-        return "kaggle CLI not found. Install with: pip install kaggle"
+    if not bundled_kaggle_available():
+        return f"{KAGGLE_CLI_MISSING}: uv tool install --force kag"
     return None
+
+
+def _auth_probe() -> tuple[bool, str]:
+    try:
+        probe = subprocess.run(
+            kaggle_command("competitions", "list", "--csv", "--page-size", "1"),
+            capture_output=True,
+            text=True,
+            timeout=12,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "timeout running auth probe"
+    except Exception as exc:
+        return False, f"probe error: {exc}"
+    if probe.returncode == 0:
+        return True, "validated via `kaggle competitions list --page-size 1`"
+    details = _first_output_line(probe.stderr, probe.stdout) or "command failed"
+    if any(marker in details.lower() for marker in ("authenticat", "unauthorized", "401")):
+        details += f" ({KAGGLE_LOGIN_HINT})"
+    return False, details
+
+
+def login_command(args: list[str]) -> int:
+    if "-h" in args or "--help" in args:
+        print(LOGIN_HELP_TEXT)
+        return 0
+    cli_error = check_kaggle_cli()
+    if cli_error:
+        print(cli_error, file=sys.stderr)
+        return 1
+    result = subprocess.run(kaggle_command("auth", "login", *args))
+    if result.returncode != 0:
+        print("Kaggle login did not complete.", file=sys.stderr)
+        return result.returncode
+    ok, details = _auth_probe()
+    if ok:
+        print("Logged in. kag can reach Kaggle.")
+        return 0
+    print(f"Login finished but Kaggle still rejected the request: {details}", file=sys.stderr)
+    return 1
 
 
 def _find_kag_exe() -> str:
@@ -176,12 +227,12 @@ def doctor_command(json_output: bool = False) -> int:
     kag_bin = shutil.which("kag")
     add_check("kag on PATH", kag_bin is not None, kag_bin or "not found")
 
-    kaggle_bin = shutil.which("kaggle")
-    if kaggle_bin:
+    cli_available = bundled_kaggle_available()
+    if cli_available:
         version = "unknown"
         try:
             proc = subprocess.run(
-                ["kaggle", "--version"],
+                kaggle_command("--version"),
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -190,9 +241,9 @@ def doctor_command(json_output: bool = False) -> int:
                 version = proc.stdout.strip() or "unknown"
         except Exception:
             pass
-        add_check("kaggle CLI", True, f"{kaggle_bin} ({version})")
+        add_check("kaggle CLI", True, f"bundled with kag ({version})")
     else:
-        add_check("kaggle CLI", False, "not found")
+        add_check("kaggle CLI", False, f"{KAGGLE_CLI_MISSING}: uv tool install --force kag")
 
     library_version = kaggle_sdk.sdk_version()
     add_check(
@@ -204,32 +255,9 @@ def doctor_command(json_output: bool = False) -> int:
     auth_ok, auth_details = _kaggle_auth_status()
     add_check("kaggle credentials", auth_ok, auth_details)
 
-    auth_runtime_ok = False
-    auth_runtime_details = "skipped (kaggle CLI unavailable)"
-    if kaggle_bin:
-        try:
-            auth_probe = subprocess.run(
-                ["kaggle", "competitions", "list", "--csv", "--page-size", "1"],
-                capture_output=True,
-                text=True,
-                timeout=12,
-            )
-            if auth_probe.returncode == 0:
-                auth_runtime_ok = True
-                auth_runtime_details = "validated via `kaggle competitions list --page-size 1`"
-            else:
-                auth_runtime_details = (
-                    _first_output_line(auth_probe.stderr, auth_probe.stdout) or "command failed"
-                )
-                if any(
-                    marker in auth_runtime_details.lower()
-                    for marker in ("authenticat", "unauthorized", "401")
-                ):
-                    auth_runtime_details += f" ({KAGGLE_LOGIN_HINT})"
-        except subprocess.TimeoutExpired:
-            auth_runtime_details = "timeout running auth probe"
-        except Exception as exc:
-            auth_runtime_details = f"probe error: {exc}"
+    auth_runtime_ok, auth_runtime_details = (
+        _auth_probe() if cli_available else (False, "skipped (bundled Kaggle CLI unavailable)")
+    )
     add_check("kaggle auth probe", auth_runtime_ok, auth_runtime_details)
 
     kag_path_exists = config.kag_path.exists()
@@ -294,6 +322,8 @@ def doctor_command(json_output: bool = False) -> int:
 def main() -> None:
     args = sys.argv[1:]
 
+    if args and args[0] == "login":
+        raise SystemExit(login_command(args[1:]))
     if args and args[0] == "new":
         from .new_command import run_new
 
