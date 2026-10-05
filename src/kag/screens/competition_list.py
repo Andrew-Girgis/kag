@@ -32,6 +32,12 @@ class SafeListView(ListView):
         if self.index >= node_count:
             self.index = node_count - 1
 
+    def watch_index(self, old_index: int | None, new_index: int | None) -> None:
+        super().watch_index(old_index, new_index)
+        for position, node in enumerate(self._nodes):
+            if isinstance(node, ListItem):
+                node.highlighted = position == new_index and not node.disabled
+
     def action_cursor_up(self) -> None:
         self._sanitize_index()
         super().action_cursor_up()
