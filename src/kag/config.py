@@ -2,7 +2,7 @@ import os
 import re
 import shutil
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 KAG_PATH_DEFAULT = Path.home() / "Kaggle"
@@ -11,6 +11,9 @@ THEME_ENV = "KAG_THEME"
 
 FALSE_VALUES = {"0", "false", "no", "off"}
 TRUE_VALUES = {"1", "true", "yes", "on"}
+
+DEFAULT_PACKAGES = ("pandas", "numpy", "matplotlib", "seaborn", "scikit-learn", "ipykernel")
+INSTALL_MODES = ("ask", "always", "never")
 
 KNOWN_EDITORS = {
     "code": {"cmd": "code", "name": "VS Code"},
@@ -22,6 +25,30 @@ KNOWN_EDITORS = {
 
 
 @dataclass
+class EnvironmentConfig:
+    install: str = "ask"
+    python: str = ""
+    packages: list[str] = field(default_factory=lambda: list(DEFAULT_PACKAGES))
+    command: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_toml(cls, section: object) -> "EnvironmentConfig":
+        if not isinstance(section, dict):
+            return cls()
+        default = cls()
+        install = section.get("install", default.install)
+        python = section.get("python", default.python)
+        packages = section.get("packages", default.packages)
+        command = section.get("command", default.command)
+        return cls(
+            install=install if install in INSTALL_MODES else default.install,
+            python=python.strip() if isinstance(python, str) else default.python,
+            packages=packages if _is_string_list(packages) else default.packages,
+            command=command if _is_string_list(command) else default.command,
+        )
+
+
+@dataclass
 class Config:
     kag_path: Path = KAG_PATH_DEFAULT
     default_editor: str | None = None
@@ -30,6 +57,7 @@ class Config:
     update_check: bool = True
     theme: str = DEFAULT_THEME
     theme_source: str = "default"
+    environment: EnvironmentConfig = field(default_factory=EnvironmentConfig)
 
     def available_editors(self) -> list[dict]:
         editors = []
@@ -51,6 +79,9 @@ class Config:
                 kag_path = Path(data.get("kag_path", str(kag_path)))
                 default_editor = data.get("default_editor")
                 auto_venv = data.get("auto_venv", True)
+                section = data.get("environment")
+                if isinstance(section, dict) and isinstance(section.get("create"), bool):
+                    auto_venv = section["create"]
                 auto_git = data.get("auto_git", True)
                 update_check = data.get("update_check", update_check)
                 update_check = _env_update_check(update_check)
@@ -60,6 +91,7 @@ class Config:
                     auto_venv=auto_venv,
                     auto_git=auto_git,
                     update_check=update_check,
+                    environment=EnvironmentConfig.from_toml(section),
                 )
                 theme = data.get("theme")
                 if isinstance(theme, str) and theme.strip():
@@ -112,6 +144,10 @@ def save_theme(name: str, path: Path | None = None) -> Path:
     tomllib.loads(updated)
     path.write_text(updated)
     return path
+
+
+def _is_string_list(value: object) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) and item for item in value)
 
 
 def _env_update_check(default: bool) -> bool:
