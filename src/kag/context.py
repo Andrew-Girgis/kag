@@ -463,7 +463,7 @@ def render_agents_md(manifest: dict) -> str:
             "- `notes.md`: overview, evaluation, data description, rules, and top notebooks",
             "- `data/`: competition data (gitignored); see `data/SCHEMA.md` for columns"
             if manifest["data"]["downloaded"]
-            else f"- `data/`: not downloaded yet; run `kaggle competitions download -c {slug} -p data`",
+            else f"- `data/`: not downloaded yet; run `kag new {slug} --force`",
             "- `.kag/competition.json`: machine-readable competition metadata",
         ]
     )
@@ -501,7 +501,7 @@ def render_agents_md(manifest: dict) -> str:
         submit = (
             "Submit by running a Kaggle notebook attached to the competition."
             if competition["notebook_only_submissions"]
-            else f'Submit with `kaggle competitions submit -c {slug} -f <file> -m "<message>"`.'
+            else f'Submit with `kag kaggle competitions submit -c {slug} -f <file> -m "<message>"`.'
         )
         lines.extend(
             [

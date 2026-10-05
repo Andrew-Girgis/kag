@@ -530,3 +530,10 @@ def test_list_competitions_page_ignores_token_text_after_header(
 
     assert len(competitions) == 1
     assert has_more is False
+
+
+def test_conftest_blocks_real_bundled_cli_invocations() -> None:
+    with pytest.raises(AssertionError, match="real kaggle CLI"):
+        subprocess.run(kaggle_api.kaggle_command("--version"))
+    with pytest.raises(AssertionError, match="real kaggle CLI"):
+        subprocess.Popen(kaggle_api.kaggle_command("--version"))
