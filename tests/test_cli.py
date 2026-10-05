@@ -294,6 +294,8 @@ def test_doctor_reports_bundled_cli(
     assert checks["kaggle CLI"] == {
         "name": "kaggle CLI",
         "ok": True,
+        "required": True,
+        "status": "ok",
         "details": "bundled with kag (Kaggle CLI 2.2.4)",
     }
     assert checks["kaggle auth probe"]["ok"] is True
@@ -533,3 +535,153 @@ def test_help_lists_every_command() -> None:
         assert f"kag {command}" in cli.HELP_TEXT
     assert "--doctor" not in cli.HELP_TEXT
     assert "--init" not in cli.HELP_TEXT
+
+
+@pytest.fixture
+def healthy_kaggle(
+    kaggle_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    completed_process: type[SimpleNamespace],
+) -> Path:
+    def fake_run(cmd: list[str], *args: object, **kwargs: object) -> object:
+        if cmd[1:] == ["-P", "-m", "kaggle", "--version"]:
+            return completed_process(returncode=0, stdout="Kaggle CLI 2.2.4\n", stderr="")
+        return completed_process(returncode=0, stdout="ref,deadline\n", stderr="")
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(cli, "_kaggle_auth_status", lambda: (True, "KAGGLE_API_TOKEN"))
+    monkeypatch.setattr(cli.kaggle_sdk, "sdk_version", lambda: "2.2.4")
+    monkeypatch.setattr(cli, "RESULT_FILE", kaggle_home / ".kag_result")
+    monkeypatch.setenv("KAG_PATH", str(kaggle_home / "Kaggle"))
+    monkeypatch.delenv("ZDOTDIR", raising=False)
+    return kaggle_home
+
+
+def _doctor_json(capsys: pytest.CaptureFixture[str]) -> tuple[int, dict[str, object]]:
+    exit_code = cli.doctor_command(json_output=True)
+    return exit_code, json.loads(capsys.readouterr().out)
+
+
+def test_doctor_passes_without_optional_checks(
+    healthy_kaggle: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    monkeypatch.setattr(cli.shutil, "which", lambda cmd: None)
+
+    exit_code, payload = _doctor_json(capsys)
+
+    checks = {check["name"]: check for check in payload["checks"]}
+    assert exit_code == 0
+    assert payload["ok"] is True
+    for name in ("kag on PATH", "shell hook", "detected editors"):
+        assert checks[name]["status"] == "warn"
+        assert checks[name]["required"] is False
+    assert checks["kaggle CLI"]["status"] == "ok"
+
+
+def test_doctor_text_output_shows_warn_and_exits_zero(
+    healthy_kaggle: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    monkeypatch.setattr(cli.shutil, "which", lambda cmd: None)
+
+    exit_code = cli.doctor_command()
+
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "WARN" in out
+    assert "FAIL" not in out
+    assert "Required checks passed." in out
+
+
+def test_doctor_fails_when_a_required_check_fails(
+    healthy_kaggle: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(cli, "_kaggle_auth_status", lambda: (False, "no credentials"))
+
+    exit_code, payload = _doctor_json(capsys)
+
+    checks = {check["name"]: check for check in payload["checks"]}
+    assert exit_code == 1
+    assert payload["ok"] is False
+    assert checks["kaggle credentials"]["status"] == "fail"
+
+
+@pytest.mark.parametrize(
+    ("shell", "rc_file"),
+    [
+        ("/bin/zsh", ".zshrc"),
+        ("/bin/bash", ".bashrc"),
+        ("/bin/bash", ".bash_profile"),
+        ("/opt/homebrew/bin/bash", ".profile"),
+        ("", ".bashrc"),
+    ],
+)
+def test_doctor_finds_shell_hook_for_the_users_shell(
+    healthy_kaggle: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    shell: str,
+    rc_file: str,
+) -> None:
+    monkeypatch.setenv("SHELL", shell)
+    (healthy_kaggle / rc_file).write_text('eval "$(kag init)"\n')
+
+    _, payload = _doctor_json(capsys)
+
+    hook = next(check for check in payload["checks"] if check["name"] == "shell hook")
+    assert hook["status"] == "ok"
+    assert hook["details"] == str(healthy_kaggle / rc_file)
+
+
+def test_doctor_shell_hook_respects_zdotdir(
+    healthy_kaggle: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    zdotdir = healthy_kaggle / "zsh"
+    zdotdir.mkdir()
+    (zdotdir / ".zshrc").write_text('eval "$(kag --init)"\n')
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+    monkeypatch.setenv("ZDOTDIR", str(zdotdir))
+
+    _, payload = _doctor_json(capsys)
+
+    hook = next(check for check in payload["checks"] if check["name"] == "shell hook")
+    assert hook["status"] == "ok"
+
+
+def test_doctor_ignores_other_shells_rc_files(
+    healthy_kaggle: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+    (healthy_kaggle / ".bashrc").write_text('eval "$(kag init)"\n')
+
+    _, payload = _doctor_json(capsys)
+
+    hook = next(check for check in payload["checks"] if check["name"] == "shell hook")
+    assert hook["status"] == "warn"
+    assert str(healthy_kaggle / ".zshrc") in hook["details"]
+
+
+def test_doctor_explains_fish_is_not_supported(
+    healthy_kaggle: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("SHELL", "/usr/local/bin/fish")
+
+    exit_code, payload = _doctor_json(capsys)
+
+    hook = next(check for check in payload["checks"] if check["name"] == "shell hook")
+    assert exit_code == 0
+    assert hook["status"] == "warn"
+    assert "fish" in hook["details"]
