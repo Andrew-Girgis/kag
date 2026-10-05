@@ -13,6 +13,7 @@ RESULT_FILE = Path.home() / ".kag_result"
 
 HELP_TEXT = """Usage:
   kag [query]
+  kag new <competition> [options]
   kag --init
   kag --doctor [--json]
   kag --version
@@ -22,6 +23,10 @@ Open a Kaggle competition picker and scaffold local workspaces.
 
 Arguments:
   query             Optional initial competition search query.
+
+Commands:
+  new               Create a workspace without the TUI (for scripts and agents).
+                    Run `kag new --help` for options.
 
 Options:
   --init            Print optional shell integration for auto-cd.
@@ -289,6 +294,10 @@ def doctor_command(json_output: bool = False) -> int:
 def main() -> None:
     args = sys.argv[1:]
 
+    if args and args[0] == "new":
+        from .new_command import run_new
+
+        raise SystemExit(run_new(args[1:]))
     if "--help" in args or "-h" in args:
         print(HELP_TEXT)
         return

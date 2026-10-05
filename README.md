@@ -134,6 +134,7 @@ eval "$(kag --init)"
 ```bash
 kag                  # open TUI
 kag titanic          # open TUI with initial search query
+kag new titanic      # create a workspace without the TUI
 kag --doctor         # environment checks
 kag --version        # show installed version
 kag --help           # show CLI help
@@ -152,6 +153,28 @@ kag --help           # show CLI help
 ```
 
 `kag --help` prints usage information without requiring Kaggle CLI authentication.
+
+## For scripts and AI agents: `kag new`
+
+`kag new` builds the same workspace as the TUI without any prompts, which makes it usable from scripts and coding agents:
+
+```bash
+kag new titanic --json                  # create ~/Kaggle/titanic and print a JSON result
+kag new titanic --json --no-download    # metadata, notes, and agent files only
+kag new titanic --json --force          # existing folder: add missing files (never overwrites)
+```
+
+Options: `--no-download`, `--no-git`, `--no-venv`, `--editor NAME`, `--force`, `--json`. Progress goes to stderr; the result goes to stdout.
+
+| Status | Exit code | Meaning |
+|---|---|---|
+| `created` / `updated` | 0 | Workspace ready. `next_steps` says where to start (`AGENTS.md`). |
+| `error` | 1 | Something failed; see `message`. |
+| `needs_join` | 3 | Join the competition and accept its rules at `url` (a human has to click), then rerun. |
+| `exists` | 4 | The folder already exists; rerun with `--force` to add missing files. |
+| `cancelled` | 130 | Interrupted with Ctrl-C; changes were rolled back. |
+
+Every project includes `AGENTS.md` (plus a `CLAUDE.md` that imports it) and `.kag/competition.json`, so an agent starts with the metric, submission template, and daily submission limit. When data is downloaded, `data/SCHEMA.md` (kept local with the data, not committed) adds per-file column schemas; with `--no-download`, `files.schema` is `null` until a later `kag new --force` downloads the data.
 
 ## How it works
 

@@ -550,3 +550,78 @@ def test_listing_keeps_smallest_paths_when_capped(
 
     assert [profile.path for profile in data.files] == ["a.png", "b.png", "c.png"]
     assert data.omitted_files == 2
+
+
+def _create(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, download: bool) -> Path:
+    def fake_download(slug: str, data_dir: str, **kwargs: object) -> DownloadResult:
+        (Path(data_dir) / "train.csv").write_text(TRAIN)
+        (Path(data_dir) / "sample_submission.csv").write_text(SAMPLE)
+        return DownloadResult(True, "Download completed", ("train.csv",))
+
+    monkeypatch.setattr(
+        project, "fetch_competition_markdown_sections", lambda slug, **kwargs: ({}, [])
+    )
+    monkeypatch.setattr(project, "fetch_competition_details", lambda slug: _details())
+    monkeypatch.setattr(project, "get_competition_files", lambda slug: ["train.csv"])
+    monkeypatch.setattr(project, "check_competition_access", lambda slug: (True, "ok"))
+    monkeypatch.setattr(
+        project,
+        "list_competition_files",
+        lambda slug: FileListResult(True, (CompetitionFile("train.csv", 10),)),
+    )
+    monkeypatch.setattr(project, "download_competition", fake_download)
+    project.create_project(
+        _competition(),
+        Config(kag_path=tmp_path, auto_git=False, auto_venv=False),
+        download_files=download,
+    )
+    return tmp_path / "titanic"
+
+
+def _manifest(project_dir: Path) -> dict:
+    return json.loads((project_dir / ".kag" / "competition.json").read_text())
+
+
+def test_downloading_later_refreshes_unedited_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_dir = _create(tmp_path, monkeypatch, download=False)
+    assert _manifest(project_dir)["data"]["downloaded"] is False
+    assert "not downloaded yet" in (project_dir / "AGENTS.md").read_text()
+
+    _create(tmp_path, monkeypatch, download=True)
+
+    manifest = _manifest(project_dir)
+    agents = (project_dir / "AGENTS.md").read_text()
+    assert manifest["data"]["downloaded"] is True
+    assert "not downloaded yet" not in agents
+    assert "see `data/SCHEMA.md`" in agents
+    assert (project_dir / "data" / "SCHEMA.md").exists()
+    assert set(manifest["generated_files"]) == {"AGENTS.md", "data/SCHEMA.md"}
+    assert manifest["generated_files"]["AGENTS.md"] == context.content_hash(agents)
+
+
+def test_edited_agents_md_is_never_refreshed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_dir = _create(tmp_path, monkeypatch, download=False)
+    edited = (project_dir / "AGENTS.md").read_text() + "\n- My own rule.\n"
+    (project_dir / "AGENTS.md").write_text(edited)
+
+    _create(tmp_path, monkeypatch, download=True)
+
+    assert (project_dir / "AGENTS.md").read_text() == edited
+    assert "AGENTS.md" not in _manifest(project_dir)["generated_files"]
+    assert _manifest(project_dir)["data"]["downloaded"] is True
+
+
+def test_projects_without_recorded_hashes_keep_their_agents_md(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_dir = tmp_path / "titanic"
+    project_dir.mkdir()
+    (project_dir / "AGENTS.md").write_text("# Older kag output\n")
+
+    _create(tmp_path, monkeypatch, download=True)
+
+    assert (project_dir / "AGENTS.md").read_text() == "# Older kag output\n"

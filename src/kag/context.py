@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import bisect
 import csv
+import hashlib
 import itertools
 import json
 import re
@@ -510,6 +511,21 @@ def render_agents_md(manifest: dict) -> str:
             ]
         )
     return "\n".join(lines) + "\n"
+
+
+def content_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def generated_hashes(project_dir: Path) -> dict[str, str]:
+    try:
+        manifest = json.loads((project_dir / MANIFEST_PATH).read_text())
+    except (OSError, ValueError):
+        return {}
+    hashes = manifest.get("generated_files") if isinstance(manifest, dict) else None
+    if not isinstance(hashes, dict):
+        return {}
+    return {str(name): str(value) for name, value in hashes.items()}
 
 
 def manifest_json(manifest: dict) -> str:
