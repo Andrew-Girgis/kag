@@ -586,3 +586,37 @@ async def test_install_prompt_is_skipped_when_config_decides(
         await pilot.pause(0.5)
 
     assert calls[0]["install_environment"] is None
+
+
+@pytest.mark.asyncio
+async def test_install_prompt_lists_packages_from_an_existing_pyproject(
+    tmp_path: Path,
+    stub_kaggle: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from kag.screens.install_packages import InstallPackagesScreen
+
+    _record_creation(monkeypatch, tmp_path)
+    (tmp_path / "titanic").mkdir()
+    (tmp_path / "titanic" / "pyproject.toml").write_text(
+        '[project]\nname = "t"\ndependencies = ["torch"]\n'
+    )
+    app = KagApp(Config(kag_path=tmp_path), initial_query="tita")
+
+    async with app.run_test() as pilot:
+        app._on_editor_selected(
+            EditorSelectScreen.Selected(
+                competition=Competition(
+                    slug="titanic", title="Titanic", deadline="", reward="", team_count="0"
+                ),
+                download_files=False,
+                editor=None,
+            )
+        )
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, InstallPackagesScreen)
+        title = str(app.screen.query_one("#install-title").render())
+        packages = str(app.screen.query_one("#install-packages").render())
+
+    assert "existing pyproject.toml" in title
+    assert packages == "torch"

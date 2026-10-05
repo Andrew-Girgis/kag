@@ -22,6 +22,7 @@ class FakeProcess:
         self.returncode = returncode
         self.waits_before_exit = waits_before_exit
         self.terminated = False
+        self.pid = 4242
 
     def wait(self, timeout: float | None = None) -> int:
         if self.terminated:
@@ -233,7 +234,9 @@ def test_setup_environment_skips_existing_venv_and_disabled_config(
     assert popen["calls"] == []
 
 
-def test_setup_environment_stops_the_install_when_cancelled(tmp_path: Path, popen: dict) -> None:
+def test_setup_environment_stops_the_install_when_cancelled(
+    tmp_path: Path, popen: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
     popen["waits"] = 100
     cancel = threading.Event()
     checks = {"count": 0}
@@ -244,10 +247,71 @@ def test_setup_environment_stops_the_install_when_cancelled(tmp_path: Path, pope
             cancel.set()
             raise ProjectCreationCancelled("Project setup cancelled")
 
+    signals: list[tuple[int, int]] = []
+
+    def killpg(pid: int, sig: int) -> None:
+        signals.append((pid, sig))
+        popen["processes"][0].terminated = True
+
+    monkeypatch.setattr(environment.os, "killpg", killpg)
+
     with pytest.raises(ProjectCreationCancelled):
         _setup(tmp_path / "p", Config(kag_path=tmp_path), install=True, check_cancel=check_cancel)
 
-    assert popen["processes"][0].terminated is True
+    assert signals == [(4242, environment.signal.SIGTERM)]
+    assert popen["calls"][0]["start_new_session"] is True
+
+
+def test_existing_pyproject_packages_are_what_gets_reported(tmp_path: Path, popen: dict) -> None:
+    project_dir = tmp_path / "p"
+    project_dir.mkdir()
+    (project_dir / "pyproject.toml").write_text(
+        '[project]\nname = "p"\ndependencies = ["torch", "pandas"]\n'
+        '[dependency-groups]\ndev = ["pytest", "pandas"]\n'
+        '[build-system]\nrequires = ["hatchling"]\n'
+    )
+    config = Config(kag_path=tmp_path)
+
+    assert environment.planned_packages(project_dir, config) == [
+        "torch",
+        "pandas",
+        "pytest",
+        "hatchling",
+    ]
+    result = _setup(project_dir, config, install=False)
+    assert result.packages == ["torch", "pandas", "pytest", "hatchling"]
+
+
+def test_unreadable_existing_pyproject_lists_no_packages(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("not = [valid")
+
+    assert environment.planned_packages(tmp_path, Config(kag_path=tmp_path)) is None
+
+
+def test_missing_requested_python_is_not_silently_replaced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(environment.shutil, "which", lambda cmd: None)
+
+    commands = environment.install_commands(EnvironmentConfig(python="3.99"))
+
+    assert commands[0][0] == "python3.99"
+
+
+def test_custom_command_runs_even_with_an_existing_venv(tmp_path: Path, popen: dict) -> None:
+    popen["create"] = False
+    popen["returncode"] = 1
+    project_dir = tmp_path / "p"
+    (project_dir / ".venv").mkdir(parents=True)
+    (project_dir / ".venv" / "keep").write_text("mine")
+    config = Config(kag_path=tmp_path, environment=EnvironmentConfig(command=["pixi", "install"]))
+
+    assert environment.needs_prompt(config, project_dir) is True
+    result = _setup(project_dir, config, install=True)
+
+    assert popen["calls"][0]["cmd"] == ["pixi", "install"]
+    assert result.status == "failed"
+    assert (project_dir / ".venv" / "keep").read_text() == "mine"
 
 
 def _stub_sources(monkeypatch: pytest.MonkeyPatch) -> None:
