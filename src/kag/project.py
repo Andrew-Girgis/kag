@@ -529,7 +529,7 @@ def create_project(
                 )
                 gitignore = project_dir / ".gitignore"
                 gitignore.write_text(
-                    ".venv/\n__pycache__/\n*.pyc\n.ipynb_checkpoints/\ndata/*\n!data/SCHEMA.md\n"
+                    ".venv/\n__pycache__/\n*.pyc\n.ipynb_checkpoints/\ndata/\n"
                     f"{EDITOR_LOG_DIR.as_posix()}/\n"
                 )
                 subprocess.run(

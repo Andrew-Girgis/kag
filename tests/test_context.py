@@ -121,14 +121,11 @@ def test_manifest_combines_details_and_data(titanic_data: Path) -> None:
     assert manifest["competition"]["evaluation_metric"] == "Categorization Accuracy"
     assert manifest["competition"]["max_daily_submissions"] == 10
     assert manifest["competition"]["tags"] == ["tabular"]
-    assert manifest["submission"] == {
-        "template": "data/sample_submission.csv",
-        "id_column": "PassengerId",
-        "target_columns": ["Survived"],
-        "rows": 2,
-    }
+    assert manifest["submission"] == {"template": "data/sample_submission.csv", "rows": 2}
     train = next(f for f in manifest["data"]["files"] if f["path"] == "data/train.csv")
-    assert train["columns"][:2] == ["PassengerId", "Survived"]
+    assert train["column_count"] == 7
+    assert "columns" not in train
+    assert "PassengerId" not in json.dumps(manifest)
     json.dumps(manifest)
 
 
@@ -154,8 +151,10 @@ def test_agents_md_for_csv_competition(titanic_data: Path) -> None:
     assert "- **Daily submission limit:** 10" in agents
     assert "- **Submission type:** CSV file upload" in agents
     assert (
-        "Match `data/sample_submission.csv`: columns `PassengerId`, `Survived`, 2 rows." in agents
-    )
+        "Match `data/sample_submission.csv` (2 rows). Its column names, plus the ID and "
+        "target columns, are listed in `data/SCHEMA.md`."
+    ) in agents
+    assert "PassengerId" not in agents
     assert 'kaggle competitions submit -c titanic -f <file> -m "<message>"' in agents
     assert "see `data/SCHEMA.md`" in agents
 
@@ -221,14 +220,15 @@ def test_create_project_writes_claude_md_import(
     assert not (Path(project_path) / "data").exists()
 
 
-def test_gitignore_keeps_schema_but_ignores_data(
+def test_no_column_names_reach_tracked_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     project_dir = tmp_path / "fresh"
     competition = Competition(slug="fresh", title="Fresh", deadline="", reward="", team_count="0")
 
     def fake_download(slug: str, data_dir: str, **kwargs: object) -> DownloadResult:
-        (Path(data_dir) / "train.csv").write_text(TRAIN)
+        (Path(data_dir) / "train.csv").write_text("QxRowId,QxSecretFeature,QxTargetLabel\n1,2,3\n")
+        (Path(data_dir) / "sample_submission.csv").write_text("QxRowId,QxTargetLabel\n1,0\n")
         return DownloadResult(True, "Download completed", ("train.csv",))
 
     monkeypatch.setattr(
@@ -244,17 +244,16 @@ def test_gitignore_keeps_schema_but_ignores_data(
 
     project.create_project(competition, Config(kag_path=tmp_path, auto_git=True, auto_venv=False))
 
-    ignored = subprocess.run(
-        ["git", "check-ignore", "data/train.csv", "data/SCHEMA.md"],
-        cwd=project_dir,
-        capture_output=True,
-        text=True,
-    ).stdout.split()
-    assert ignored == ["data/train.csv"]
     staged = subprocess.run(
         ["git", "ls-files"], cwd=project_dir, capture_output=True, text=True
     ).stdout.split()
-    assert {"data/SCHEMA.md", "AGENTS.md", "CLAUDE.md", ".kag/competition.json"} <= set(staged)
+    assert {"AGENTS.md", "CLAUDE.md", ".kag/competition.json"} <= set(staged)
+    assert not any(path.startswith("data/") for path in staged)
+    for path in staged:
+        content = (project_dir / path).read_text(errors="ignore")
+        for name in ("QxRowId", "QxSecretFeature", "QxTargetLabel"):
+            assert name not in content, f"{name} leaked into tracked {path}"
+    assert "QxSecretFeature" in (project_dir / "data" / "SCHEMA.md").read_text()
 
 
 def test_rows_count_csv_records_not_newlines(tmp_path: Path) -> None:
