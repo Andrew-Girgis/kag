@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import bisect
 import csv
 import itertools
 import json
@@ -27,6 +28,7 @@ MAX_EXACT_COUNT_BYTES = 128 * 1024 * 1024
 MAX_ESTIMATED_COUNT_BYTES = 512 * 1024 * 1024
 COUNT_CHUNK_SIZE = 1024 * 1024
 PRIORITY_STEMS = ("sample_submission", "gender_submission", "train", "test")
+MAX_TOTAL_ESTIMATE_BYTES = 2 * 1024 * 1024 * 1024
 
 
 @dataclass
@@ -99,7 +101,9 @@ def _cancelled(cancel: threading.Event | None) -> bool:
     return cancel is not None and cancel.is_set()
 
 
-def _estimate_rows(path: Path, cancel: threading.Event | None = None) -> int | None:
+def _estimate_rows(
+    path: Path, cancel: threading.Event | None = None, has_header: bool = True
+) -> int | None:
     if path.stat().st_size > MAX_ESTIMATED_COUNT_BYTES:
         return None
     newlines = 0
@@ -111,11 +115,14 @@ def _estimate_rows(path: Path, cancel: threading.Event | None = None) -> int | N
             newlines += chunk.count(b"\n")
             last = chunk[-1:]
     lines = newlines + (0 if last == b"\n" else 1)
-    return max(0, lines - 1)
+    return max(0, lines - 1) if has_header else lines
 
 
 def profile_csv(
-    path: Path, data_dir: Path, cancel: threading.Event | None = None
+    path: Path,
+    data_dir: Path,
+    cancel: threading.Event | None = None,
+    estimate_budget: list[int] | None = None,
 ) -> DataFileProfile:
     profile = DataFileProfile(
         path=path.relative_to(data_dir).as_posix(),
@@ -161,8 +168,12 @@ def profile_csv(
     if count_exactly:
         profile.rows = records
     else:
-        profile.rows = _estimate_rows(path, cancel)
-        profile.rows_estimated = profile.rows is not None
+        budget_left = estimate_budget[0] if estimate_budget is not None else profile.size_bytes
+        if profile.size_bytes <= budget_left:
+            if estimate_budget is not None:
+                estimate_budget[0] -= profile.size_bytes
+            profile.rows = _estimate_rows(path, cancel, profile.has_header)
+            profile.rows_estimated = profile.rows is not None
     profile.inspected = True
     return profile
 
@@ -200,37 +211,53 @@ def profile_data(
     if not data_dir.is_dir():
         return DataProfile(downloaded=False, files=[], listed_files=listed_files)
 
-    found: list[Path] = []
+    csv_candidates: list[tuple[tuple[int, str], Path]] = []
+    others: list[tuple[str, int]] = []
+    omitted = {"count": 0, "bytes": 0}
+    omitted_extensions: dict[str, int] = {}
+    total_files = 0
+
+    def omit(relative: str, size: int) -> None:
+        omitted["count"] += 1
+        omitted["bytes"] += size
+        extension = Path(relative).suffix.lower() or "(none)"
+        omitted_extensions[extension] = omitted_extensions.get(extension, 0) + 1
+
+    def keep_listed(relative: str, size: int) -> None:
+        bisect.insort(others, (relative, size))
+        if len(others) > MAX_LISTED_FILES:
+            dropped, dropped_size = others.pop()
+            omit(dropped, dropped_size)
+
     for index, path in enumerate(data_dir.rglob("*")):
         if index % CANCEL_CHECK_RECORDS == 0 and _cancelled(cancel):
-            return DataProfile(downloaded=bool(found), files=[], listed_files=listed_files)
-        if path.is_file() and path.name != SCHEMA_PATH.name and path.suffix.lower() != ".zip":
-            found.append(path)
-    paths = sorted(found)
-    csv_paths = sorted((path for path in paths if path.suffix.lower() == ".csv"), key=_csv_priority)
-    inspected = set(csv_paths[:MAX_INSPECTED_CSVS])
+            return DataProfile(downloaded=total_files > 0, files=[], listed_files=listed_files)
+        if not path.is_file() or path.name == SCHEMA_PATH.name or path.suffix.lower() == ".zip":
+            continue
+        total_files += 1
+        if path.suffix.lower() == ".csv":
+            bisect.insort(csv_candidates, (_csv_priority(path), path))
+            if len(csv_candidates) <= MAX_INSPECTED_CSVS:
+                continue
+            _, path = csv_candidates.pop()
+        keep_listed(path.relative_to(data_dir).as_posix(), path.stat().st_size)
 
+    estimate_budget = [MAX_TOTAL_ESTIMATE_BYTES]
     profiles: list[DataFileProfile] = []
-    for path in sorted(inspected):
+    for _, path in csv_candidates:
         if _cancelled(cancel):
             break
-        profiles.append(profile_csv(path, data_dir, cancel))
-    data = DataProfile(downloaded=bool(paths), files=profiles, listed_files=listed_files)
-    for index, path in enumerate(paths):
-        if index % CANCEL_CHECK_RECORDS == 0 and _cancelled(cancel):
-            break
-        if path in inspected:
-            continue
-        size = path.stat().st_size
-        if len(data.files) < MAX_LISTED_FILES:
-            data.files.append(
-                DataFileProfile(path=path.relative_to(data_dir).as_posix(), size_bytes=size)
-            )
-            continue
-        data.omitted_files += 1
-        data.omitted_bytes += size
-        extension = path.suffix.lower() or "(none)"
-        data.omitted_extensions[extension] = data.omitted_extensions.get(extension, 0) + 1
+        profiles.append(profile_csv(path, data_dir, cancel, estimate_budget))
+    data = DataProfile(downloaded=total_files > 0, files=profiles, listed_files=listed_files)
+    room = max(0, MAX_LISTED_FILES - len(profiles))
+    for relative, size in others[room:]:
+        omit(relative, size)
+    data.files.extend(
+        DataFileProfile(path=relative, size_bytes=size) for relative, size in others[:room]
+    )
+    data.omitted_files = omitted["count"]
+    data.omitted_bytes = omitted["bytes"]
+    data.omitted_extensions = omitted_extensions
     data.files.sort(key=lambda profile: profile.path)
 
     submission = _find(profiles, "sample_submission") or _find(profiles, "gender_submission")

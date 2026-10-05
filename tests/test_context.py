@@ -505,3 +505,48 @@ def test_headerless_csv_is_streamed_not_materialized(
     assert profile.has_header is False
     assert len(consumed) <= 4
     assert profile.rows_estimated is True
+
+
+def test_headerless_estimates_keep_the_first_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(context, "MAX_EXACT_COUNT_BYTES", 1)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "values.csv").write_text("1,0.5\n2,0.25\n3,0.75\n")
+
+    profile = context.profile_csv(data_dir / "values.csv", data_dir)
+
+    assert profile.has_header is False
+    assert profile.rows == 3
+    assert profile.rows_estimated is True
+
+
+def test_row_estimation_has_an_aggregate_budget(
+    titanic_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(context, "MAX_EXACT_COUNT_BYTES", 1)
+    submission_size = (titanic_data / "sample_submission.csv").stat().st_size
+    monkeypatch.setattr(context, "MAX_TOTAL_ESTIMATE_BYTES", submission_size)
+
+    data = context.profile_data(titanic_data, [])
+    rows = {profile.path: profile.rows for profile in data.files if profile.inspected}
+
+    assert rows["sample_submission.csv"] == 2
+    assert rows["train.csv"] is None
+    assert rows["test.csv"] is None
+
+
+def test_listing_keeps_smallest_paths_when_capped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(context, "MAX_LISTED_FILES", 3)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    for name in ("z.png", "b.png", "y.png", "a.png", "c.png"):
+        (data_dir / name).write_bytes(b"x")
+
+    data = context.profile_data(data_dir, [])
+
+    assert [profile.path for profile in data.files] == ["a.png", "b.png", "c.png"]
+    assert data.omitted_files == 2
