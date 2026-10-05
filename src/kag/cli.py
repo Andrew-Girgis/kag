@@ -39,7 +39,8 @@ DOCTOR_HELP_TEXT = """Usage:
   kag doctor [--json]
 
 Check the bundled Kaggle CLI and library, Kaggle credentials and access,
-KAG_PATH, the shell hook, and detected editors.
+KAG_PATH, the shell hook, and detected editors. Exits 1 only when a required
+check fails; the shell hook, editors, and kag on PATH are optional (WARN).
 
 Options:
   --json    Print machine-readable results."""
@@ -240,6 +241,59 @@ def _check_writable(path: Path) -> bool:
         return False
 
 
+def _zsh_dotdir(shell_path: str | None) -> Path:
+    zdotdir = os.environ.get("ZDOTDIR")
+    if zdotdir:
+        return Path(zdotdir)
+    if shell_path:
+        try:
+            proc = subprocess.run(
+                [shell_path, "-c", 'print -r -- "${ZDOTDIR:-$HOME}"'],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                stdin=subprocess.DEVNULL,
+            )
+            lines = proc.stdout.strip().splitlines()
+            if proc.returncode == 0 and lines:
+                return Path(lines[-1])
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return Path.home()
+
+
+def _bash_startup_files() -> list[Path]:
+    home = Path.home()
+    login_files = [home / ".bash_profile", home / ".bash_login", home / ".profile"]
+    login_file = next((path for path in login_files if path.is_file()), login_files[0])
+    return [home / ".bashrc", login_file]
+
+
+def _shell_rc_files(shell_path: str) -> list[Path]:
+    shell = Path(shell_path).name
+    if shell == "zsh":
+        return [_zsh_dotdir(shell_path) / ".zshrc"]
+    if shell == "bash":
+        return _bash_startup_files()
+    return [_zsh_dotdir(None) / ".zshrc", *_bash_startup_files()]
+
+
+def _shell_hook_status() -> tuple[bool, str]:
+    shell_path = os.environ.get("SHELL", "")
+    if Path(shell_path).name == "fish":
+        return False, "fish isn't supported yet; kag still works, but won't cd into the project"
+    rc_files = _shell_rc_files(shell_path)
+    for rc_file in rc_files:
+        try:
+            text = rc_file.read_text(errors="ignore")
+        except OSError:
+            continue
+        if "kag init" in text or "kag --init" in text:
+            return True, str(rc_file)
+    checked = ", ".join(str(rc_file) for rc_file in rc_files)
+    return False, f'not found in {checked}; add eval "$(kag init)" to cd into new projects'
+
+
 def doctor_command(json_output: bool = False) -> int:
     from rich.console import Console
     from rich.table import Table
@@ -249,11 +303,25 @@ def doctor_command(json_output: bool = False) -> int:
 
     checks: list[dict[str, str | bool]] = []
 
-    def add_check(name: str, ok: bool, details: str) -> None:
-        checks.append({"name": name, "ok": ok, "details": details})
+    def add_check(name: str, ok: bool, details: str, required: bool = True) -> None:
+        status = "ok" if ok else "fail" if required else "warn"
+        checks.append(
+            {
+                "name": name,
+                "ok": ok,
+                "required": required,
+                "status": status,
+                "details": details,
+            }
+        )
 
     kag_bin = shutil.which("kag")
-    add_check("kag on PATH", kag_bin is not None, kag_bin or "not found")
+    add_check(
+        "kag on PATH",
+        kag_bin is not None,
+        kag_bin or "not found (fine when running from a checkout with `uv run kag`)",
+        required=False,
+    )
 
     cli_available = bundled_kaggle_available()
     if cli_available:
@@ -299,23 +367,23 @@ def doctor_command(json_output: bool = False) -> int:
     )
 
     result_writable = _check_writable(RESULT_FILE)
-    add_check("result file writable", result_writable, str(RESULT_FILE))
+    add_check("result file writable", result_writable, str(RESULT_FILE), required=False)
 
-    zshrc = Path.home() / ".zshrc"
-    shell_hook_ok = False
-    if zshrc.exists():
-        text = zshrc.read_text(errors="ignore")
-        shell_hook_ok = "kag --init" in text or "kag init" in text
-    add_check("shell hook in .zshrc", shell_hook_ok, str(zshrc))
+    shell_hook_ok, shell_hook_details = _shell_hook_status()
+    add_check("shell hook", shell_hook_ok, shell_hook_details, required=False)
 
     editors = config.available_editors()
     add_check(
         "detected editors",
         len(editors) > 0,
-        ", ".join(editor["cmd"] for editor in editors) if editors else "none",
+        ", ".join(editor["cmd"] for editor in editors)
+        if editors
+        else "none (projects are created without opening an editor)",
+        required=False,
     )
 
-    has_failure = any(not bool(check["ok"]) for check in checks)
+    has_failure = any(check["status"] == "fail" for check in checks)
+    has_warning = any(check["status"] == "warn" for check in checks)
 
     if json_output:
         payload = {
@@ -330,12 +398,9 @@ def doctor_command(json_output: bool = False) -> int:
     table.add_column("Status")
     table.add_column("Details")
 
+    labels = {"ok": "[green]OK[/green]", "warn": "[yellow]WARN[/yellow]", "fail": "[red]FAIL[/red]"}
     for check in checks:
-        name = str(check["name"])
-        ok = bool(check["ok"])
-        details = str(check["details"])
-        status = "[green]OK[/green]" if ok else "[red]FAIL[/red]"
-        table.add_row(name, status, details)
+        table.add_row(str(check["name"]), labels[str(check["status"])], str(check["details"]))
 
     console.print(table)
     if has_failure:
@@ -343,6 +408,9 @@ def doctor_command(json_output: bool = False) -> int:
             "\n[bold red]Doctor found issues.[/bold red] Fix FAIL rows and re-run `kag doctor`."
         )
         return 1
+    if has_warning:
+        console.print("\n[bold green]Required checks passed.[/bold green] WARN rows are optional.")
+        return 0
     console.print("\n[bold green]All checks passed.[/bold green]")
     return 0
 
