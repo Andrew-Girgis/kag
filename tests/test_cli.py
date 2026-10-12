@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -788,3 +790,143 @@ def test_doctor_warns_when_default_editor_is_not_installed(
     assert checks["config file"]["status"] == "ok"
     assert checks["default editor"]["status"] == "warn"
     assert "cursor is not installed" in checks["default editor"]["details"]
+
+
+def _fake_kag(tmp_path: Path, project: Path) -> Path:
+    bin_dir = tmp_path / "bin dir"
+    bin_dir.mkdir()
+    fake = bin_dir / "kag"
+    fake.write_text(
+        "#!/bin/sh\n"
+        'echo "$KAG_RESULT_FILE" >> "$KAG_TEST_LOG"\n'
+        f'printf %s {project} > "$KAG_RESULT_FILE"\n'
+    )
+    fake.chmod(0o755)
+    return fake
+
+
+@pytest.mark.parametrize("shell", ["bash", "zsh"])
+def test_shell_function_cds_using_a_fresh_result_file_each_run(
+    shell: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if not shutil.which(shell):
+        pytest.skip(f"{shell} not installed")
+    project = tmp_path / "Kaggle" / "titanic"
+    project.mkdir(parents=True)
+    fake = _fake_kag(tmp_path, project)
+    monkeypatch.setattr(cli, "_kag_command", lambda: [str(fake)])
+    log = tmp_path / "result-files.log"
+    temp_dir = tmp_path / "tmp"
+    temp_dir.mkdir()
+
+    script = f"{cli.init_command()}\nkag && pwd && kag && pwd"
+    completed = subprocess.run(
+        [shell, "-c", script],
+        cwd=tmp_path,
+        env={"PATH": "/usr/bin:/bin", "TMPDIR": str(temp_dir), "KAG_TEST_LOG": str(log)},
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.splitlines() == [str(project.resolve())] * 2
+    result_files = log.read_text().splitlines()
+    assert len(set(result_files)) == 2
+    assert all(Path(path).parent == temp_dir for path in result_files)
+    assert list(temp_dir.iterdir()) == []
+
+
+def test_run_tui_writes_the_result_to_the_requested_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import kag.tui
+
+    class FakeApp:
+        def __init__(self, config: object, initial_query: str) -> None:
+            self.result = "/projects/titanic"
+            self.messages: list[str] = []
+
+        def run(self) -> None:
+            return None
+
+    result_file = tmp_path / "kag-result.abc123"
+    result_file.touch()
+    monkeypatch.setattr(cli, "check_kaggle_cli", lambda: None)
+    monkeypatch.setattr(kag.tui, "KagApp", FakeApp)
+    monkeypatch.setattr(cli, "RESULT_FILE", tmp_path / ".kag_result")
+    monkeypatch.setenv("KAG_RESULT_FILE", str(result_file))
+
+    assert cli.run_tui("") == 0
+    assert result_file.read_text() == "/projects/titanic"
+    assert not (tmp_path / ".kag_result").exists()
+
+
+def test_run_tui_does_not_follow_a_symlinked_result_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import kag.tui
+
+    class FakeApp:
+        def __init__(self, config: object, initial_query: str) -> None:
+            self.result = "/projects/titanic"
+            self.messages: list[str] = []
+
+        def run(self) -> None:
+            return None
+
+    target = tmp_path / "important.txt"
+    target.write_text("keep me")
+    legacy = tmp_path / ".kag_result"
+    legacy.symlink_to(target)
+    monkeypatch.setattr(cli, "check_kaggle_cli", lambda: None)
+    monkeypatch.setattr(kag.tui, "KagApp", FakeApp)
+    monkeypatch.setattr(cli, "RESULT_FILE", legacy)
+    monkeypatch.delenv("KAG_RESULT_FILE", raising=False)
+
+    assert cli.run_tui("") == 0
+    assert target.read_text() == "keep me"
+    assert "couldn't write" in capsys.readouterr().err
+
+
+def test_init_quotes_an_executable_path_with_spaces(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "_kag_command", lambda: ["/Users/me/My Tools/kag"])
+
+    assert "'/Users/me/My Tools/kag' \"$@\"" in cli.init_command()
+
+
+def test_doctor_checks_the_shell_hooks_result_file_without_probing_tmp(
+    healthy_kaggle: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    temp_dir = healthy_kaggle / "tmp"
+    temp_dir.mkdir()
+    result_file = temp_dir / "kag-result.abc123"
+    result_file.touch()
+    (temp_dir / ".kag_write_probe").mkdir()
+    monkeypatch.setenv("KAG_RESULT_FILE", str(result_file))
+
+    _, payload = _doctor_json(capsys)
+
+    checks = {check["name"]: check for check in payload["checks"]}
+    assert checks["result file writable"]["status"] == "ok"
+    assert checks["result file writable"]["details"] == str(result_file)
+    assert (temp_dir / ".kag_write_probe").is_dir()
+
+
+def test_doctor_rejects_a_symlinked_result_file(
+    healthy_kaggle: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    target = healthy_kaggle / "target"
+    target.touch()
+    link = healthy_kaggle / "kag-result.link"
+    link.symlink_to(target)
+    monkeypatch.setenv("KAG_RESULT_FILE", str(link))
+
+    _, payload = _doctor_json(capsys)
+
+    checks = {check["name"]: check for check in payload["checks"]}
+    assert checks["result file writable"]["status"] == "warn"
