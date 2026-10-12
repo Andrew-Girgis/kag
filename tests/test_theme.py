@@ -225,3 +225,9 @@ def test_doctor_reports_the_theme(
     checks = {c["name"]: c for c in json.loads(capsys.readouterr().out)["checks"]}
     assert checks["theme"]["status"] == "warn"
     assert "'nrod'" in checks["theme"]["details"]
+
+
+def test_app_reports_config_warnings(tmp_path: Path) -> None:
+    app = KagApp(Config(kag_path=tmp_path, warnings=["Couldn't read the config"]))
+
+    assert app.messages == ["Couldn't read the config"]

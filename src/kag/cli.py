@@ -7,7 +7,7 @@ from pathlib import Path
 
 from . import __version__, kaggle_sdk
 from .kaggle_api import KAGGLE_CLI_MISSING, bundled_kaggle_available, kaggle_command
-from .config import Config
+from .config import KNOWN_EDITORS, Config, config_path
 
 
 RESULT_FILE = Path.home() / ".kag_result"
@@ -356,6 +356,15 @@ def doctor_command(json_output: bool = False) -> int:
     )
     add_check("kaggle auth probe", auth_runtime_ok, auth_runtime_details)
 
+    settings_path = config_path()
+    add_check(
+        "config file",
+        not config.warnings,
+        "; ".join(config.warnings)
+        or (str(settings_path) if settings_path.exists() else "none (using defaults)"),
+        required=False,
+    )
+
     kag_path_exists = config.kag_path.exists()
     kag_path_writable = _check_writable(config.kag_path / ".probe")
     kag_path_ok = kag_path_writable
@@ -381,6 +390,18 @@ def doctor_command(json_output: bool = False) -> int:
         else "none (projects are created without opening an editor)",
         required=False,
     )
+
+    if config.default_editor:
+        preferred = config.find_editor(config.default_editor)
+        add_check(
+            "default editor",
+            preferred is not None,
+            preferred["cmd"]
+            if preferred
+            else f"{config.default_editor} is not installed or not a known editor "
+            f"({', '.join(KNOWN_EDITORS)})",
+            required=False,
+        )
 
     from .theme import resolve_theme
 

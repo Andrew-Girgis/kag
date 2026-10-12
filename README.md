@@ -102,10 +102,12 @@ Fix any `FAIL` rows before starting a competition workspace.
 By default, `kag` creates projects in `~/Kaggle`. Set `kag_path` in the optional config file, `~/.kag_config.toml`:
 
 ```toml
-kag_path = "/Users/you/Kaggle"
-default_editor = "code"
+kag_path = "~/Kaggle"     # ~ and $VARIABLES are expanded
+default_editor = "code"   # highlighted first in the editor picker: code, cursor, zed, windsurf or jupyter
 auto_git = true
 ```
+
+If the file can't be read, kag says so when it starts and uses the defaults; `kag doctor` shows the problem too.
 
 Or set `KAG_PATH` for one shell or session:
 

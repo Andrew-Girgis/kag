@@ -58,6 +58,7 @@ class Config:
     theme: str = DEFAULT_THEME
     theme_source: str = "default"
     environment: EnvironmentConfig = field(default_factory=EnvironmentConfig)
+    warnings: list[str] = field(default_factory=list)
 
     def available_editors(self) -> list[dict]:
         editors = []
@@ -66,17 +67,26 @@ class Config:
                 editors.append({**info, "key": _key})
         return editors
 
+    def find_editor(self, name: str | None) -> dict | None:
+        if not name:
+            return None
+        for editor in self.available_editors():
+            if name in (editor["key"], editor["cmd"]):
+                return editor
+        return None
+
     @classmethod
     def load(cls) -> "Config":
-        config_path = Path.home() / ".kag_config.toml"
+        path = config_path()
         kag_path = KAG_PATH_DEFAULT
         update_check = True
+        warnings: list[str] = []
 
-        if config_path.exists():
+        if path.exists():
             try:
-                with open(config_path, "rb") as f:
+                with open(path, "rb") as f:
                     data = tomllib.load(f)
-                kag_path = Path(data.get("kag_path", str(kag_path)))
+                kag_path = _expand_path(data.get("kag_path", str(kag_path)))
                 default_editor = data.get("default_editor")
                 auto_venv = data.get("auto_venv", True)
                 section = data.get("environment")
@@ -97,31 +107,30 @@ class Config:
                 if isinstance(theme, str) and theme.strip():
                     config.theme, config.theme_source = theme, "config"
                 return _env_overrides(config)
-            except Exception:
-                pass
+            except Exception as exc:
+                warnings.append(f"Couldn't read {path} ({exc}); using the defaults instead.")
 
-        return _env_overrides(cls(kag_path=KAG_PATH_DEFAULT, update_check=_env_update_check(True)))
-
-    def save(self) -> None:
-        config_path = Path.home() / ".kag_config.toml"
-        lines = [
-            f'kag_path = "{self.kag_path}"',
-            f'default_editor = "{self.default_editor or ""}"',
-            f"auto_venv = {str(self.auto_venv).lower()}",
-            f"auto_git = {str(self.auto_git).lower()}",
-            f"update_check = {str(self.update_check).lower()}",
-        ]
-        config_path.write_text("\n".join(lines) + "\n")
+        return _env_overrides(
+            cls(
+                kag_path=KAG_PATH_DEFAULT,
+                update_check=_env_update_check(True),
+                warnings=warnings,
+            )
+        )
 
 
 def _env_overrides(config: Config) -> Config:
     kag_path = os.environ.get("KAG_PATH", "")
     if kag_path.strip():
-        config.kag_path = Path(kag_path)
+        config.kag_path = _expand_path(kag_path)
     theme = os.environ.get(THEME_ENV, "").strip()
     if theme:
         config.theme, config.theme_source = theme, THEME_ENV
     return config
+
+
+def _expand_path(value: str) -> Path:
+    return Path(os.path.expandvars(value)).expanduser()
 
 
 def config_path() -> Path:

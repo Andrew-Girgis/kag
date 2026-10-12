@@ -118,9 +118,9 @@ def _competition(slug: str, details: CompetitionDetails | None) -> Competition:
 def _resolve_editor(config: Config, requested: str | None) -> tuple[str | None, str | None]:
     if not requested:
         return None, None
-    for editor in config.available_editors():
-        if requested in (editor["key"], editor["cmd"]):
-            return editor["cmd"], None
+    editor = config.find_editor(requested)
+    if editor:
+        return editor["cmd"], None
     available = ", ".join(editor["key"] for editor in config.available_editors()) or "none"
     return None, f"Editor '{requested}' is not installed. Available: {available}"
 
