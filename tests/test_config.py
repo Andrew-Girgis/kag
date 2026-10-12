@@ -101,3 +101,9 @@ def test_invalid_config_falls_back_to_defaults_but_keeps_environment(
 
     assert loaded.kag_path == Path("/scratch/kaggle")
     assert loaded.auto_git is True
+
+
+def test_kag_path_environment_is_used_exactly(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("KAG_PATH", "/data/Kaggle ")
+
+    assert Config.load().kag_path == Path("/data/Kaggle ")

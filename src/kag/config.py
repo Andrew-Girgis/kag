@@ -115,8 +115,8 @@ class Config:
 
 
 def _env_overrides(config: Config) -> Config:
-    kag_path = os.environ.get("KAG_PATH", "").strip()
-    if kag_path:
+    kag_path = os.environ.get("KAG_PATH", "")
+    if kag_path.strip():
         config.kag_path = Path(kag_path)
     theme = os.environ.get(THEME_ENV, "").strip()
     if theme:
