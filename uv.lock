@@ -228,7 +228,7 @@ wheels = [
 
 [[package]]
 name = "kag"
-version = "0.2.2rc1"
+version = "0.2.2"
 source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },
