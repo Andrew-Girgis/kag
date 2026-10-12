@@ -159,6 +159,21 @@ def test_install_commands_fall_back_to_venv_and_pip_without_uv(
     assert commands[1][-4:] == ["-m", "pip", "install", "pandas"]
 
 
+def test_describe_keeps_executables_that_are_not_on_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(environment.shutil, "which", lambda cmd: None)
+
+    command = ["/pipx/venvs/kag/bin/python", "-m", "venv", ".venv"]
+
+    assert environment.describe([command]) == "/pipx/venvs/kag/bin/python -m venv .venv"
+
+
+def test_describe_shortens_executables_found_on_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(environment.shutil, "which", lambda cmd: f"/opt/bin/{cmd}")
+
+    assert environment.describe([["/opt/bin/pixi", "install"]]) == "pixi install"
+    assert environment.describe([["/elsewhere/pixi", "install"]]) == "/elsewhere/pixi install"
+
+
 def _setup(project_dir: Path, config: Config, install: bool, **kwargs: object) -> EnvironmentResult:
     project_dir.mkdir(exist_ok=True)
     return environment.setup_environment(
@@ -535,6 +550,19 @@ def test_kag_pyproject_stays_installable_until_edited(
         (project_dir / "pyproject.toml").read_text().replace('"pandas"', '"pandas", "torch"')
     )
     assert environment.owns_pyproject(project_dir) is False
+
+
+def test_users_pyproject_with_an_existing_venv_is_user_managed(tmp_path: Path, popen: dict) -> None:
+    project_dir = tmp_path / "p"
+    (project_dir / ".venv").mkdir(parents=True)
+    (project_dir / "pyproject.toml").write_text('[project]\nname = "p"\n')
+
+    result = _setup(project_dir, Config(kag_path=tmp_path), install=True)
+
+    assert result.status == "user_managed"
+    assert popen["calls"] == []
+    message = environment.follow_up(result, project_dir)
+    assert message is not None and message.endswith("uv sync")
 
 
 def test_custom_command_still_runs_for_a_users_pyproject(tmp_path: Path, popen: dict) -> None:

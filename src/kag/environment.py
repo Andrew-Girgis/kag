@@ -162,8 +162,11 @@ def install_commands(
 
 def _display(command: list[str]) -> str:
     program = command[0]
-    if program == sys.executable or Path(program).is_absolute():
-        program = Path(program).name
+    if Path(program).is_absolute():
+        name = Path(program).name
+        found = shutil.which(name)
+        if found and Path(found).resolve() == Path(program).resolve():
+            program = name
     return shlex.join([program, *command[1:]])
 
 
@@ -239,7 +242,7 @@ def setup_environment(
     if not config.auto_venv:
         return EnvironmentResult(status="disabled")
     custom = bool(config.environment.command)
-    if not custom and not (project_dir / VENV_NAME).exists() and not owns_pyproject(project_dir):
+    if not custom and not owns_pyproject(project_dir):
         return EnvironmentResult(
             status="user_managed",
             install_command="uv sync",
