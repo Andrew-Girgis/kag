@@ -99,19 +99,21 @@ Fix any `FAIL` rows before starting a competition workspace.
 
 ### 4. Choose where projects are created
 
-By default, `kag` creates projects in `~/Kaggle`. Override it with `KAG_PATH`:
-
-```bash
-export KAG_PATH=~/Kaggle
-```
-
-Optional persistent config lives at `~/.kag_config.toml`:
+By default, `kag` creates projects in `~/Kaggle`. Set `kag_path` in the optional config file, `~/.kag_config.toml`:
 
 ```toml
 kag_path = "/Users/you/Kaggle"
 default_editor = "code"
 auto_git = true
 ```
+
+Or set `KAG_PATH` for one shell or session:
+
+```bash
+export KAG_PATH=~/Kaggle
+```
+
+Environment variables (`KAG_PATH`, `KAG_THEME`, `KAG_UPDATE_CHECK`) take priority over `~/.kag_config.toml`, which takes priority over the defaults.
 
 #### Colours and themes
 

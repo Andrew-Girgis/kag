@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from kag import config
@@ -32,3 +34,76 @@ def test_jupyter_lab_not_offered_for_classic_jupyter_only(
     editors = Config().available_editors()
 
     assert [editor["cmd"] for editor in editors] == ["code"]
+
+
+@pytest.fixture
+def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setattr(config.Path, "home", classmethod(lambda cls: tmp_path))
+    for name in ("KAG_PATH", "KAG_THEME", "KAG_UPDATE_CHECK"):
+        monkeypatch.delenv(name, raising=False)
+    return tmp_path
+
+
+def test_defaults_apply_without_config_or_environment(home: Path) -> None:
+    loaded = Config.load()
+
+    assert loaded.kag_path == config.KAG_PATH_DEFAULT
+    assert loaded.default_editor is None
+    assert loaded.auto_venv is True
+    assert loaded.auto_git is True
+    assert loaded.update_check is True
+
+
+def test_config_file_overrides_defaults(home: Path) -> None:
+    (home / ".kag_config.toml").write_text(
+        'kag_path = "/data/kaggle"\ndefault_editor = "code"\n'
+        "auto_venv = false\nauto_git = false\nupdate_check = false\n"
+    )
+
+    loaded = Config.load()
+
+    assert loaded.kag_path == Path("/data/kaggle")
+    assert loaded.default_editor == "code"
+    assert loaded.auto_venv is False
+    assert loaded.auto_git is False
+    assert loaded.update_check is False
+
+
+def test_environment_overrides_config_file(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (home / ".kag_config.toml").write_text(
+        'kag_path = "/data/kaggle"\nupdate_check = true\ntheme = "nord"\n'
+    )
+    monkeypatch.setenv("KAG_PATH", "/scratch/kaggle")
+    monkeypatch.setenv("KAG_UPDATE_CHECK", "0")
+    monkeypatch.setenv("KAG_THEME", "kag")
+
+    loaded = Config.load()
+
+    assert loaded.kag_path == Path("/scratch/kaggle")
+    assert loaded.update_check is False
+    assert loaded.theme == "kag"
+
+
+def test_empty_kag_path_environment_is_ignored(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (home / ".kag_config.toml").write_text('kag_path = "/data/kaggle"\n')
+    monkeypatch.setenv("KAG_PATH", "  ")
+
+    assert Config.load().kag_path == Path("/data/kaggle")
+
+
+def test_invalid_config_falls_back_to_defaults_but_keeps_environment(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (home / ".kag_config.toml").write_text('kag_path = "/data/kaggle"\nauto_git = \n')
+    monkeypatch.setenv("KAG_PATH", "/scratch/kaggle")
+
+    loaded = Config.load()
+
+    assert loaded.kag_path == Path("/scratch/kaggle")
+    assert loaded.auto_git is True
+
+
+def test_kag_path_environment_is_used_exactly(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("KAG_PATH", "/data/Kaggle ")
+
+    assert Config.load().kag_path == Path("/data/Kaggle ")
