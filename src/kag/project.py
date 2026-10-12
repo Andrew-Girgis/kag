@@ -3,7 +3,6 @@ import keyword
 import re
 import shutil
 import subprocess
-import sys
 import threading
 import unicodedata
 import zipfile
@@ -19,7 +18,8 @@ from .kaggle_api import (
     get_competition_files,
     list_competition_files,
 )
-from . import context, kaggle_sdk
+from . import context, environment, kaggle_sdk
+from .environment import EnvironmentResult
 from .kaggle_sdk import CompetitionDetails
 from .notes_fetcher import fetch_competition_markdown_sections
 
@@ -416,6 +416,7 @@ def _write_agent_context(
     listed_files: list[str],
     notebook_name: str,
     cancel: threading.Event | None = None,
+    pyproject_written: bool = False,
 ) -> None:
     data_profile = context.profile_data(project_dir / "data", listed_files, cancel)
     if cancel is not None and cancel.is_set():
@@ -423,13 +424,19 @@ def _write_agent_context(
     manifest = context.build_manifest(competition, details, data_profile, notebook_name)
     title = details.title if details else competition.title
     previous = context.generated_hashes(project_dir)
-    outputs = {"AGENTS.md": context.render_agents_md(manifest)}
+    has_pyproject = (project_dir / environment.PYPROJECT_NAME).exists()
+    outputs = {"AGENTS.md": context.render_agents_md(manifest, has_pyproject)}
     if data_profile.downloaded:
         outputs[context.SCHEMA_PATH.as_posix()] = context.render_schema_md(title, data_profile)
     owned: dict[str, str] = {}
     for name, content in outputs.items():
         if _write_generated(project_dir / name, content, previous.get(name)):
             owned[name] = context.content_hash(content)
+    pyproject = project_dir / environment.PYPROJECT_NAME
+    if pyproject.exists():
+        current = context.content_hash(pyproject.read_text())
+        if pyproject_written or previous.get(environment.PYPROJECT_NAME) == current:
+            owned[environment.PYPROJECT_NAME] = current
     manifest["generated_files"] = owned
     manifest_path = project_dir / context.MANIFEST_PATH
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -445,6 +452,8 @@ def create_project(
     progress: Callable[[str], None] | None = None,
     cancel: threading.Event | None = None,
     details: CompetitionDetails | None = None,
+    install_environment: bool | None = None,
+    on_environment: Callable[[EnvironmentResult], None] | None = None,
 ) -> str | None:
     def report(message: str) -> None:
         if progress is not None:
@@ -539,9 +548,30 @@ def create_project(
         )
         _write_if_missing(project_dir / "notes.md", notes)
 
+        pyproject_written = environment.write_pyproject(project_dir, competition.slug, config)
+
         check_cancel()
         report("Writing agent context files...")
-        _write_agent_context(project_dir, competition, details, files, notebook_path.name, cancel)
+        _write_agent_context(
+            project_dir,
+            competition,
+            details,
+            files,
+            notebook_path.name,
+            cancel,
+            pyproject_written=pyproject_written,
+        )
+
+        check_cancel()
+        environment_result = environment.setup_environment(
+            project_dir,
+            config,
+            environment.wants_install(config, install_environment),
+            check_cancel,
+            report,
+        )
+        if on_environment is not None:
+            on_environment(environment_result)
 
         check_cancel()
         if config.auto_git and not project_had_content:
@@ -563,18 +593,6 @@ def create_project(
                     cwd=str(project_dir),
                     capture_output=True,
                     timeout=10,
-                )
-            except Exception:
-                pass
-
-        if config.auto_venv and not (project_dir / ".venv").exists():
-            report("Creating virtual environment...")
-            try:
-                subprocess.run(
-                    [sys.executable, "-m", "venv", ".venv"],
-                    cwd=str(project_dir),
-                    capture_output=True,
-                    timeout=30,
                 )
             except Exception:
                 pass

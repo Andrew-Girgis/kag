@@ -734,3 +734,26 @@ def test_doctor_explains_fish_is_not_supported(
     assert exit_code == 0
     assert hook["status"] == "warn"
     assert "fish" in hook["details"]
+
+
+def test_run_tui_prints_follow_up_messages_after_exit(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    import kag.tui
+
+    class FakeApp:
+        def __init__(self, config: object, initial_query: str) -> None:
+            self.result = None
+            self.messages = ["Python packages were not installed."]
+
+        def run(self) -> None:
+            return None
+
+    monkeypatch.setattr(cli, "check_kaggle_cli", lambda: None)
+    monkeypatch.setattr(kag.tui, "KagApp", FakeApp)
+    monkeypatch.setattr(cli, "RESULT_FILE", tmp_path / ".kag_result")
+
+    assert cli.run_tui("") == 0
+    assert capsys.readouterr().err == "kag: Python packages were not installed.\n"
