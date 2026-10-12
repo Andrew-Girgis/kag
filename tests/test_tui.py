@@ -381,3 +381,19 @@ def test_project_warnings_are_shown_after_exit(
 
     assert app.result == str(tmp_path / "titanic")
     assert app.messages == ["Couldn't set up git (git isn't installed)."]
+
+
+def test_invalid_competition_slug_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    competition = Competition(slug="../evil", title="Evil", deadline="", reward="", team_count="0")
+    app = KagApp(Config(kag_path=tmp_path))
+    notifications: list[str] = []
+    pushed: list[object] = []
+    monkeypatch.setattr(app, "notify", lambda message, **kwargs: notifications.append(message))
+    monkeypatch.setattr(app, "push_screen", lambda screen, callback=None: pushed.append(screen))
+
+    app._on_competition_selected(CompetitionListScreen.Selected(competition=competition))
+
+    assert pushed == []
+    assert len(notifications) == 1 and "'../evil'" in notifications[0]

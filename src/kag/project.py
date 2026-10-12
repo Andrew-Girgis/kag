@@ -13,6 +13,7 @@ from typing import BinaryIO
 from .config import Config
 from .kaggle_api import (
     Competition,
+    is_valid_slug,
     check_competition_access,
     download_competition,
     get_competition_files,
@@ -348,6 +349,8 @@ def _download_failure_message(slug: str, details: str) -> str:
 
 
 def existing_project_dir(config: Config, slug: str) -> Path | None:
+    if not is_valid_slug(slug):
+        return None
     project_dir = config.kag_path / slug
     try:
         if project_dir.is_dir() and any(project_dir.iterdir()):
@@ -504,6 +507,8 @@ def create_project(
         if cancel is not None and cancel.is_set():
             raise ProjectCreationCancelled("Project setup cancelled")
 
+    if not is_valid_slug(competition.slug):
+        raise ProjectCreationError(f"Invalid competition slug: {competition.slug!r}")
     project_dir = config.kag_path / competition.slug
     project_existed = project_dir.exists()
     project_had_content = existing_project_dir(config, competition.slug) is not None

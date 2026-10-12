@@ -1,6 +1,7 @@
 import csv
 import importlib.util
 import io
+import re
 import subprocess
 import sys
 import tempfile
@@ -377,12 +378,21 @@ def check_competition_access(slug: str) -> tuple[bool, str]:
     return False, details or "Competition access denied"
 
 
+SLUG_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+
+
+def is_valid_slug(slug: str) -> bool:
+    return bool(SLUG_PATTERN.fullmatch(slug))
+
+
 def open_competition_in_browser(slug: str) -> None:
     open_competition_page(slug, "overview")
     open_competition_page(slug, "rules")
 
 
 def open_competition_page(slug: str, page: str) -> None:
+    if not is_valid_slug(slug):
+        raise ValueError(f"Invalid competition slug: {slug!r}")
     base = f"https://www.kaggle.com/competitions/{slug}"
     webbrowser.open_new_tab(f"{base}/{page}")
 

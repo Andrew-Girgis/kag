@@ -10,7 +10,7 @@ from textual.widgets import Header, Footer
 
 from . import __version__
 from .config import THEME_ENV, Config, save_theme
-from .kaggle_api import Competition
+from .kaggle_api import Competition, is_valid_slug
 from .screens.access_required import AccessRequiredScreen
 from .screens.competition_list import CompetitionListScreen
 from .screens.editor_select import EditorSelectScreen
@@ -224,6 +224,13 @@ class KagApp(App):
         if result.is_local:
             self.result = result.project_path
             self.exit()
+            return
+        if not is_valid_slug(result.competition.slug):
+            self.notify(
+                f"Kaggle returned an invalid competition name: {result.competition.slug!r}",
+                severity="error",
+                timeout=10,
+            )
             return
         existing_dir = existing_project_dir(self.config, result.competition.slug)
         if existing_dir is not None:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 import threading
 from pathlib import Path
@@ -10,7 +9,7 @@ from urllib.parse import urlparse
 
 from . import context, environment
 from .config import Config
-from .kaggle_api import Competition, check_competition_access
+from .kaggle_api import Competition, check_competition_access, is_valid_slug
 from .kaggle_sdk import CompetitionDetails
 from .project import (
     ProjectCreationCancelled,
@@ -31,7 +30,6 @@ NEW_USAGE = (
     "[--editor NAME] [--force] [--json]"
 )
 SKIPPED_DIRECTORIES = {".git", ".venv", "data"}
-SLUG_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -158,7 +156,7 @@ def run_new(argv: list[str]) -> int:
         _emit({**base, **result}, as_json)
         return code
 
-    if not SLUG_PATTERN.fullmatch(slug):
+    if not is_valid_slug(slug):
         return finish(
             {"status": "error", "message": f"Invalid competition: {args.competition}"},
             EXIT_ERROR,
