@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from textual.widgets import Input, ListView
 
+from kag import config as config_module
 from kag.config import Config
 from kag.kaggle_api import Competition, CompetitionFile, FileListResult
 from kag.project import ProjectCreationCancelled
@@ -586,3 +587,26 @@ async def test_install_prompt_is_skipped_when_config_decides(
         await pilot.pause(0.5)
 
     assert calls[0]["install_environment"] is None
+
+
+@pytest.mark.asyncio
+async def test_editor_select_preselects_the_configured_default_editor(
+    tmp_path: Path,
+    stub_kaggle: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    installed = {"code", "cursor", "zed"}
+    monkeypatch.setattr(
+        config_module.shutil, "which", lambda cmd: f"/bin/{cmd}" if cmd in installed else None
+    )
+    app = KagApp(
+        Config(kag_path=tmp_path, auto_venv=False, default_editor="cursor"),
+        initial_query="tita",
+    )
+
+    async with app.run_test() as pilot:
+        await _reach_editor_select(app, pilot)
+
+        editors = app.screen.query_one("#editor-list", ListView)
+        assert editors.highlighted_child is not None
+        assert editors.highlighted_child.id == "editor-cursor"

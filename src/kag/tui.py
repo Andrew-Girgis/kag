@@ -162,8 +162,10 @@ class KagApp(App):
         self.result: str | None = None
         self.messages: list[str] = []
         self.theme, self._theme_warning = resolve_theme(config.theme)
+        self._startup_warnings = [*config.warnings]
         if self._theme_warning:
-            self.messages.append(self._theme_warning)
+            self._startup_warnings.append(self._theme_warning)
+        self.messages.extend(self._startup_warnings)
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -172,8 +174,8 @@ class KagApp(App):
     def on_mount(self) -> None:
         self.push_screen(CompetitionListScreen(self.config, initial_query=self.initial_query))
         self._check_for_update()
-        if self._theme_warning:
-            self.notify(self._theme_warning, severity="warning", timeout=10)
+        for warning in self._startup_warnings:
+            self.notify(warning, severity="warning", timeout=10)
 
     def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
         yield SystemCommand(

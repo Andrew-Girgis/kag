@@ -757,3 +757,34 @@ def test_run_tui_prints_follow_up_messages_after_exit(
 
     assert cli.run_tui("") == 0
     assert capsys.readouterr().err == "kag: Python packages were not installed.\n"
+
+
+def test_doctor_warns_about_an_unreadable_config_file(
+    healthy_kaggle: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (healthy_kaggle / ".kag_config.toml").write_text("auto_git = \n")
+
+    exit_code, payload = _doctor_json(capsys)
+
+    checks = {check["name"]: check for check in payload["checks"]}
+    assert exit_code == 0
+    assert checks["config file"]["status"] == "warn"
+    assert "using the defaults" in checks["config file"]["details"]
+
+
+def test_doctor_warns_when_default_editor_is_not_installed(
+    healthy_kaggle: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (healthy_kaggle / ".kag_config.toml").write_text('default_editor = "cursor"\n')
+    monkeypatch.setattr(cli.shutil, "which", lambda cmd: None)
+
+    _, payload = _doctor_json(capsys)
+
+    checks = {check["name"]: check for check in payload["checks"]}
+    assert checks["config file"]["status"] == "ok"
+    assert checks["default editor"]["status"] == "warn"
+    assert "cursor is not installed" in checks["default editor"]["details"]

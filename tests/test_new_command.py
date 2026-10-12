@@ -205,9 +205,7 @@ def test_competition_urls_resolve_to_slug(
     assert result["slug"] == "titanic"
 
 
-@pytest.mark.parametrize(
-    "value", ["..", "../outside", "..\\outside", "C:\\outside", "a b", ""]
-)
+@pytest.mark.parametrize("value", ["..", "../outside", "..\\outside", "C:\\outside", "a b", ""])
 def test_invalid_competition_is_rejected(
     env: dict, capsys: pytest.CaptureFixture[str], value: str
 ) -> None:
@@ -293,3 +291,12 @@ def test_cli_dispatches_new_subcommand(
     cli.main()
 
     assert json.loads(capsys.readouterr().out)["status"] == "created"
+
+
+def test_config_warnings_are_reported(env: dict, capsys: pytest.CaptureFixture[str]) -> None:
+    new_command.Config.load().warnings.append("Couldn't read ~/.kag_config.toml")
+
+    code, result = _run(capsys, "titanic")
+
+    assert code == 0
+    assert result["warnings"][0] == "Couldn't read ~/.kag_config.toml"

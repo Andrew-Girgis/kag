@@ -31,16 +31,20 @@ class EditorSelectScreen(Screen):
         for ed in self.editors:
             items.append(ListItem(Label(f"{ed['name']} ({ed['cmd']})"), id=f"editor-{ed['key']}"))
         items.append(ListItem(Label("Terminal only (no editor)"), id="editor-none"))
-        yield ListView(*items, id="editor-list")
+        preferred = self.config.find_editor(self.config.default_editor)
+        index = self.editors.index(preferred) if preferred else 0
+        yield ListView(*items, id="editor-list", initial_index=index)
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         item_id = event.item.id
         if item_id == "editor-none":
-            self.dismiss(EditorSelectScreen.Selected(
-                competition=self.competition,
-                download_files=self.download_files,
-                editor=None,
-            ))
+            self.dismiss(
+                EditorSelectScreen.Selected(
+                    competition=self.competition,
+                    download_files=self.download_files,
+                    editor=None,
+                )
+            )
         elif item_id and item_id.startswith("editor-"):
             key = item_id.removeprefix("editor-")
             editor_cmd = None
@@ -48,11 +52,13 @@ class EditorSelectScreen(Screen):
                 if ed["key"] == key:
                     editor_cmd = ed["cmd"]
                     break
-            self.dismiss(EditorSelectScreen.Selected(
-                competition=self.competition,
-                download_files=self.download_files,
-                editor=editor_cmd,
-            ))
+            self.dismiss(
+                EditorSelectScreen.Selected(
+                    competition=self.competition,
+                    download_files=self.download_files,
+                    editor=editor_cmd,
+                )
+            )
 
     def action_cancel(self) -> None:
         self.dismiss(None)

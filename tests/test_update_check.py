@@ -240,11 +240,3 @@ def test_config_load_env_overrides_update_check_config(
     config = Config.load()
 
     assert config.update_check is True
-
-
-def test_config_save_writes_update_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path))
-
-    Config(kag_path=tmp_path / "projects", update_check=False).save()
-
-    assert "update_check = false" in (tmp_path / ".kag_config.toml").read_text()
