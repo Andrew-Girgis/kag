@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -11,6 +12,7 @@ from .config import KNOWN_EDITORS, Config, config_path
 
 
 RESULT_FILE = Path.home() / ".kag_result"
+RESULT_FILE_ENV = "KAG_RESULT_FILE"
 
 HELP_TEXT = """Usage:
   kag [query]              Open the competition picker, optionally searching
@@ -200,34 +202,50 @@ def login_command(args: list[str]) -> int:
     return 1
 
 
-def _find_kag_exe() -> str:
+def _kag_command() -> list[str]:
     kag_exe = shutil.which("kag")
     if kag_exe:
-        return kag_exe
+        return [kag_exe]
     project_dir = Path(__file__).resolve().parent.parent
     venv_python = project_dir / ".venv" / "bin" / "python"
     if venv_python.exists():
-        return f"{venv_python} -m kag.cli"
-    return sys.executable + " -m kag.cli"
+        return [str(venv_python), "-m", "kag.cli"]
+    return [sys.executable, "-m", "kag.cli"]
 
 
 def init_command() -> str:
-    kag_exe = _find_kag_exe()
+    kag_command = shlex.join(_kag_command())
 
     return f'''kag() {{
-    rm -f "{RESULT_FILE}"
-    {kag_exe} "$@"
-    local ret=$?
-    if [ $ret -eq 0 ] && [ -f "{RESULT_FILE}" ]; then
-        local kag_output
-        kag_output=$(cat "{RESULT_FILE}")
-        rm -f "{RESULT_FILE}"
+    local kag_result kag_output ret
+    kag_result=$(mktemp "${{TMPDIR:-/tmp}}/kag-result.XXXXXX") || return 1
+    {RESULT_FILE_ENV}="$kag_result" {kag_command} "$@"
+    ret=$?
+    if [ $ret -eq 0 ] && [ -s "$kag_result" ]; then
+        kag_output=$(cat "$kag_result")
         if [ -n "$kag_output" ]; then
-            cd "$kag_output"
+            cd -- "$kag_output"
         fi
     fi
+    rm -f "$kag_result"
     return $ret
 }}'''
+
+
+def _result_file() -> Path:
+    path = os.environ.get(RESULT_FILE_ENV, "")
+    return Path(path) if path else RESULT_FILE
+
+
+def _write_result(path: Path, text: str) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags, 0o600)
+    except OSError as exc:
+        print(f"kag: couldn't write {path} ({exc}); not changing directory", file=sys.stderr)
+        return
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
 
 
 def _check_writable(path: Path) -> bool:
@@ -375,8 +393,9 @@ def doctor_command(json_output: bool = False) -> int:
         f"{config.kag_path} ({kag_path_note}, writable={kag_path_writable})",
     )
 
-    result_writable = _check_writable(RESULT_FILE)
-    add_check("result file writable", result_writable, str(RESULT_FILE), required=False)
+    result_file = _result_file()
+    result_writable = _check_writable(result_file)
+    add_check("result file writable", result_writable, str(result_file), required=False)
 
     shell_hook_ok, shell_hook_details = _shell_hook_status()
     add_check("shell hook", shell_hook_ok, shell_hook_details, required=False)
@@ -477,7 +496,7 @@ def run_tui(initial_query: str) -> int:
     for message in app.messages:
         print(f"kag: {message}", file=sys.stderr)
     if app.result:
-        RESULT_FILE.write_text(app.result)
+        _write_result(_result_file(), app.result)
     return 0
 
 
