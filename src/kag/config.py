@@ -69,7 +69,7 @@ class Config:
     @classmethod
     def load(cls) -> "Config":
         config_path = Path.home() / ".kag_config.toml"
-        kag_path = Path(os.environ.get("KAG_PATH", str(KAG_PATH_DEFAULT)))
+        kag_path = KAG_PATH_DEFAULT
         update_check = True
 
         if config_path.exists():
@@ -96,11 +96,11 @@ class Config:
                 theme = data.get("theme")
                 if isinstance(theme, str) and theme.strip():
                     config.theme, config.theme_source = theme, "config"
-                return _env_theme(config)
+                return _env_overrides(config)
             except Exception:
                 pass
 
-        return _env_theme(cls(kag_path=kag_path, update_check=_env_update_check(update_check)))
+        return _env_overrides(cls(kag_path=KAG_PATH_DEFAULT, update_check=_env_update_check(True)))
 
     def save(self) -> None:
         config_path = Path.home() / ".kag_config.toml"
@@ -114,7 +114,10 @@ class Config:
         config_path.write_text("\n".join(lines) + "\n")
 
 
-def _env_theme(config: Config) -> Config:
+def _env_overrides(config: Config) -> Config:
+    kag_path = os.environ.get("KAG_PATH", "").strip()
+    if kag_path:
+        config.kag_path = Path(kag_path)
     theme = os.environ.get(THEME_ENV, "").strip()
     if theme:
         config.theme, config.theme_source = theme, THEME_ENV
