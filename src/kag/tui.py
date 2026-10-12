@@ -345,6 +345,7 @@ class KagApp(App):
             return
 
         self.result = result.project_path
+        self.messages.extend(result.warnings)
         if result.environment is not None:
             message = follow_up(result.environment, self.config.kag_path / result.competition.slug)
             if message:

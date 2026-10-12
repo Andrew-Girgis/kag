@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from kag.config import Config
@@ -358,3 +360,24 @@ def test_missing_update_notice_does_not_notify(tmp_path, monkeypatch: pytest.Mon
     app._show_update_notice(None)
 
     assert notifications == []
+
+
+def test_project_warnings_are_shown_after_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    competition = Competition(
+        slug="titanic", title="Titanic", deadline="", reward="", team_count="0"
+    )
+    app = KagApp(Config(kag_path=tmp_path))
+    monkeypatch.setattr(app, "exit", lambda *args, **kwargs: None)
+
+    app._on_project_created(
+        CreatingProjectScreen.Finished(
+            competition,
+            project_path=str(tmp_path / "titanic"),
+            warnings=["Couldn't set up git (git isn't installed)."],
+        )
+    )
+
+    assert app.result == str(tmp_path / "titanic")
+    assert app.messages == ["Couldn't set up git (git isn't installed)."]
