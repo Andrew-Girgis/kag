@@ -86,7 +86,10 @@ class Config:
             try:
                 with open(path, "rb") as f:
                     data = tomllib.load(f)
-                kag_path = _expand_path(data.get("kag_path", str(kag_path)))
+                kag_path = (
+                    _expand_path(data.get("kag_path", str(kag_path)), "kag_path", warnings)
+                    or KAG_PATH_DEFAULT
+                )
                 default_editor = data.get("default_editor")
                 auto_venv = data.get("auto_venv", True)
                 section = data.get("environment")
@@ -102,6 +105,7 @@ class Config:
                     auto_git=auto_git,
                     update_check=update_check,
                     environment=EnvironmentConfig.from_toml(section),
+                    warnings=warnings,
                 )
                 theme = data.get("theme")
                 if isinstance(theme, str) and theme.strip():
@@ -122,15 +126,19 @@ class Config:
 def _env_overrides(config: Config) -> Config:
     kag_path = os.environ.get("KAG_PATH", "")
     if kag_path.strip():
-        config.kag_path = _expand_path(kag_path)
+        config.kag_path = _expand_path(kag_path, "KAG_PATH", config.warnings) or config.kag_path
     theme = os.environ.get(THEME_ENV, "").strip()
     if theme:
         config.theme, config.theme_source = theme, THEME_ENV
     return config
 
 
-def _expand_path(value: str) -> Path:
-    return Path(os.path.expandvars(value)).expanduser()
+def _expand_path(value: str, source: str, warnings: list[str]) -> Path | None:
+    try:
+        return Path(os.path.expandvars(value)).expanduser()
+    except RuntimeError as exc:
+        warnings.append(f"Couldn't expand {source} {value!r} ({exc}); ignoring it.")
+        return None
 
 
 def config_path() -> Path:

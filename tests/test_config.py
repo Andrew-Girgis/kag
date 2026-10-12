@@ -145,3 +145,19 @@ def test_find_editor_matches_key_or_command(
     assert loaded.find_editor("jupyter-lab")["key"] == "jupyter"
     assert loaded.find_editor("cursor") is None
     assert loaded.find_editor(None) is None
+
+
+def test_unresolvable_home_in_kag_path_is_reported_not_raised(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (home / ".kag_config.toml").write_text('kag_path = "~nobody-kag-test/a"\nauto_git = false\n')
+
+    loaded = Config.load()
+    assert loaded.kag_path == config.KAG_PATH_DEFAULT
+    assert loaded.auto_git is False
+    assert len(loaded.warnings) == 1 and "kag_path" in loaded.warnings[0]
+
+    monkeypatch.setenv("KAG_PATH", "~nobody-kag-test/b")
+    loaded = Config.load()
+    assert loaded.kag_path == config.KAG_PATH_DEFAULT
+    assert any("KAG_PATH" in warning for warning in loaded.warnings)

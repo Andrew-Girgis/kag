@@ -153,6 +153,8 @@ def run_new(argv: list[str]) -> int:
     base: dict = {"slug": slug, "path": str(project_dir)}
 
     def finish(result: dict, code: int) -> int:
+        if config.warnings:
+            result = {**result, "warnings": [*config.warnings, *result.get("warnings", [])]}
         _emit({**base, **result}, as_json)
         return code
 
