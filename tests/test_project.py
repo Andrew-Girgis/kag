@@ -985,3 +985,15 @@ def test_git_timeout_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     _, warnings = _create_with_git(tmp_path, monkeypatch, run)
 
     assert len(warnings) == 1 and "git add timed out" in warnings[0]
+
+
+def test_create_project_refuses_a_slug_that_escapes_kag_path(tmp_path: Path) -> None:
+    kag_path = tmp_path / "Kaggle"
+    competition = Competition(slug="../evil", title="", deadline="", reward="", team_count="0")
+
+    with pytest.raises(project.ProjectCreationError, match="Invalid competition slug"):
+        project.create_project(competition, Config(kag_path=kag_path), download_files=False)
+
+    assert not (tmp_path / "evil").exists()
+    assert not kag_path.exists()
+    assert project.existing_project_dir(Config(kag_path=kag_path), "../evil") is None

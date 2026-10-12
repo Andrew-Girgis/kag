@@ -537,3 +537,27 @@ def test_conftest_blocks_real_bundled_cli_invocations() -> None:
         subprocess.run(kaggle_api.kaggle_command("--version"))
     with pytest.raises(AssertionError, match="real kaggle CLI"):
         subprocess.Popen(kaggle_api.kaggle_command("--version"))
+
+
+@pytest.mark.parametrize(
+    "slug",
+    ["titanic", "house-prices-advanced-regression-techniques", "playground-series-s5e1", "A_b-1"],
+)
+def test_valid_slugs(slug: str) -> None:
+    assert kaggle_api.is_valid_slug(slug)
+
+
+@pytest.mark.parametrize(
+    "slug", ["", "../evil", "a/b", "evil.com", "-flag", "titanic?x=1", "tit anic", ".."]
+)
+def test_invalid_slugs(slug: str) -> None:
+    assert not kaggle_api.is_valid_slug(slug)
+
+
+def test_open_competition_page_refuses_an_invalid_slug(monkeypatch: pytest.MonkeyPatch) -> None:
+    opened: list[str] = []
+    monkeypatch.setattr(kaggle_api.webbrowser, "open_new_tab", opened.append)
+
+    with pytest.raises(ValueError, match="Invalid competition slug"):
+        kaggle_api.open_competition_page("evil.com/x", "rules")
+    assert opened == []
