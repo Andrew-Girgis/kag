@@ -216,7 +216,7 @@ def _kag_command() -> list[str]:
 def init_command() -> str:
     kag_command = shlex.join(_kag_command())
 
-    return f'''kag() {{
+    return f"""kag() {{
     local kag_result kag_output ret
     kag_result=$(mktemp "${{TMPDIR:-/tmp}}/kag-result.XXXXXX") || return 1
     {RESULT_FILE_ENV}="$kag_result" {kag_command} "$@"
@@ -229,7 +229,7 @@ def init_command() -> str:
     fi
     rm -f "$kag_result"
     return $ret
-}}'''
+}}"""
 
 
 def _result_file() -> Path:
@@ -394,7 +394,14 @@ def doctor_command(json_output: bool = False) -> int:
     )
 
     result_file = _result_file()
-    result_writable = _check_writable(result_file)
+    if os.environ.get(RESULT_FILE_ENV):
+        result_writable = (
+            result_file.is_file()
+            and not result_file.is_symlink()
+            and os.access(result_file, os.W_OK)
+        )
+    else:
+        result_writable = _check_writable(result_file)
     add_check("result file writable", result_writable, str(result_file), required=False)
 
     shell_hook_ok, shell_hook_details = _shell_hook_status()

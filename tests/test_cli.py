@@ -893,3 +893,40 @@ def test_init_quotes_an_executable_path_with_spaces(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(cli, "_kag_command", lambda: ["/Users/me/My Tools/kag"])
 
     assert "'/Users/me/My Tools/kag' \"$@\"" in cli.init_command()
+
+
+def test_doctor_checks_the_shell_hooks_result_file_without_probing_tmp(
+    healthy_kaggle: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    temp_dir = healthy_kaggle / "tmp"
+    temp_dir.mkdir()
+    result_file = temp_dir / "kag-result.abc123"
+    result_file.touch()
+    (temp_dir / ".kag_write_probe").mkdir()
+    monkeypatch.setenv("KAG_RESULT_FILE", str(result_file))
+
+    _, payload = _doctor_json(capsys)
+
+    checks = {check["name"]: check for check in payload["checks"]}
+    assert checks["result file writable"]["status"] == "ok"
+    assert checks["result file writable"]["details"] == str(result_file)
+    assert (temp_dir / ".kag_write_probe").is_dir()
+
+
+def test_doctor_rejects_a_symlinked_result_file(
+    healthy_kaggle: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    target = healthy_kaggle / "target"
+    target.touch()
+    link = healthy_kaggle / "kag-result.link"
+    link.symlink_to(target)
+    monkeypatch.setenv("KAG_RESULT_FILE", str(link))
+
+    _, payload = _doctor_json(capsys)
+
+    checks = {check["name"]: check for check in payload["checks"]}
+    assert checks["result file writable"]["status"] == "warn"
