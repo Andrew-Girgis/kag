@@ -231,6 +231,7 @@ def run_new(argv: list[str]) -> int:
                 details=details,
                 install_environment=True if args.install else None,
                 on_environment=environment_results.append,
+                on_warning=warnings.append,
             )
         except BaseException as exc:
             outcome["error"] = exc

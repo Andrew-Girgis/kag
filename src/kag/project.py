@@ -444,6 +444,46 @@ def _write_agent_context(
     _write_if_missing(project_dir / "CLAUDE.md", "@AGENTS.md\n")
 
 
+def _git(args: list[str], project_dir: Path) -> str | None:
+    try:
+        completed = subprocess.run(
+            ["git", *args], cwd=str(project_dir), capture_output=True, text=True, timeout=10
+        )
+    except FileNotFoundError:
+        return "git isn't installed"
+    except subprocess.TimeoutExpired:
+        return f"git {args[0]} timed out"
+    except OSError as exc:
+        return f"couldn't run git {args[0]}: {exc}"
+    if completed.returncode == 0:
+        return None
+    output = (completed.stderr or completed.stdout or "").strip()
+    reason = output.splitlines()[0] if output else f"exit code {completed.returncode}"
+    return f"git {args[0]} failed: {reason}"
+
+
+def _setup_git(project_dir: Path) -> str | None:
+    problem = _git(["init"], project_dir)
+    if problem:
+        return f"Couldn't set up git ({problem}), so the project isn't a git repository."
+    try:
+        (project_dir / ".gitignore").write_text(
+            ".venv/\n__pycache__/\n*.pyc\n.ipynb_checkpoints/\ndata/\n"
+            f"{EDITOR_LOG_DIR.as_posix()}/\n"
+        )
+    except OSError as exc:
+        return f"Couldn't write .gitignore ({exc}), so kag didn't make the initial git commit."
+    problem = _git(["add", "-A"], project_dir) or _git(
+        ["commit", "-m", "Initial commit from kag"], project_dir
+    )
+    if problem:
+        return (
+            f"Couldn't make the initial git commit ({problem}). The repository is set up; "
+            "run `git add -A && git commit` in the project when you're ready."
+        )
+    return None
+
+
 def create_project(
     competition: Competition,
     config: Config,
@@ -454,6 +494,7 @@ def create_project(
     details: CompetitionDetails | None = None,
     install_environment: bool | None = None,
     on_environment: Callable[[EnvironmentResult], None] | None = None,
+    on_warning: Callable[[str], None] | None = None,
 ) -> str | None:
     def report(message: str) -> None:
         if progress is not None:
@@ -576,26 +617,9 @@ def create_project(
         check_cancel()
         if config.auto_git and not project_had_content:
             report("Setting up git...")
-            try:
-                subprocess.run(
-                    ["git", "init"], cwd=str(project_dir), capture_output=True, timeout=10
-                )
-                gitignore = project_dir / ".gitignore"
-                gitignore.write_text(
-                    ".venv/\n__pycache__/\n*.pyc\n.ipynb_checkpoints/\ndata/\n"
-                    f"{EDITOR_LOG_DIR.as_posix()}/\n"
-                )
-                subprocess.run(
-                    ["git", "add", "-A"], cwd=str(project_dir), capture_output=True, timeout=10
-                )
-                subprocess.run(
-                    ["git", "commit", "-m", "Initial commit from kag"],
-                    cwd=str(project_dir),
-                    capture_output=True,
-                    timeout=10,
-                )
-            except Exception:
-                pass
+            git_warning = _setup_git(project_dir)
+            if git_warning and on_warning is not None:
+                on_warning(git_warning)
 
         check_cancel()
         if editor and shutil.which(editor):

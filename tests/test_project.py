@@ -911,3 +911,77 @@ def test_create_project_passes_cancel_to_notes_fetch(
 
     assert received == [cancel]
     assert not (tmp_path / "titanic").exists()
+
+
+def _create_with_git(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, run: object
+) -> tuple[str | None, list[str]]:
+    _stub_project_sources(monkeypatch)
+    monkeypatch.setattr(project.subprocess, "run", run)
+    warnings: list[str] = []
+    project_path = project.create_project(
+        _existing_competition(),
+        Config(kag_path=tmp_path, auto_git=True, auto_venv=False),
+        download_files=False,
+        on_warning=warnings.append,
+    )
+    return project_path, warnings
+
+
+def test_git_setup_success_reports_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    commands: list[list[str]] = []
+
+    def run(cmd: list[str], *args: object, **kwargs: object) -> object:
+        commands.append(list(cmd))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    project_path, warnings = _create_with_git(tmp_path, monkeypatch, run)
+
+    assert project_path is not None
+    assert warnings == []
+    assert [cmd[1] for cmd in commands if cmd[0] == "git"] == ["init", "add", "commit"]
+
+
+def test_missing_git_is_reported_and_project_still_created(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def run(cmd: list[str], *args: object, **kwargs: object) -> object:
+        raise FileNotFoundError("git")
+
+    project_path, warnings = _create_with_git(tmp_path, monkeypatch, run)
+
+    assert project_path is not None and Path(project_path).is_dir()
+    assert warnings == [
+        "Couldn't set up git (git isn't installed), so the project isn't a git repository."
+    ]
+
+
+def test_failed_initial_commit_is_reported_with_gits_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def run(cmd: list[str], *args: object, **kwargs: object) -> object:
+        if cmd[:2] == ["git", "commit"]:
+            return SimpleNamespace(
+                returncode=128,
+                stdout="",
+                stderr="Author identity unknown\n\n*** Please tell me who you are.\n",
+            )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    project_path, warnings = _create_with_git(tmp_path, monkeypatch, run)
+
+    assert project_path is not None
+    assert len(warnings) == 1
+    assert "initial git commit (git commit failed: Author identity unknown)" in warnings[0]
+    assert "git add -A && git commit" in warnings[0]
+
+
+def test_git_timeout_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def run(cmd: list[str], *args: object, **kwargs: object) -> object:
+        if cmd[:2] == ["git", "add"]:
+            raise project.subprocess.TimeoutExpired(cmd, 10)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    _, warnings = _create_with_git(tmp_path, monkeypatch, run)
+
+    assert len(warnings) == 1 and "git add timed out" in warnings[0]

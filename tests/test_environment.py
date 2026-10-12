@@ -625,3 +625,19 @@ def test_custom_command_inherits_the_environment(tmp_path: Path, popen: dict) ->
     _setup(tmp_path / "p", config, install=True)
 
     assert popen["calls"][0]["env"] is None
+
+
+def test_kag_new_reports_git_warnings(
+    new_env: dict, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = new_command.create_project
+
+    def create_with_warning(**kwargs: object) -> str:
+        kwargs["on_warning"]("Couldn't make the initial git commit.")  # type: ignore[operator]
+        return original(**kwargs)
+
+    monkeypatch.setattr(new_command, "create_project", create_with_warning)
+
+    result = _run_new(capsys)
+
+    assert "Couldn't make the initial git commit." in result["warnings"]

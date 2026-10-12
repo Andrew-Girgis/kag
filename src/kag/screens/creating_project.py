@@ -35,12 +35,14 @@ class CreatingProjectScreen(Screen):
             error: str | None = None,
             cancelled: bool = False,
             environment: EnvironmentResult | None = None,
+            warnings: list[str] | None = None,
         ):
             self.competition = competition
             self.project_path = project_path
             self.error = error
             self.cancelled = cancelled
             self.environment = environment
+            self.warnings = warnings or []
 
     def __init__(
         self,
@@ -58,6 +60,7 @@ class CreatingProjectScreen(Screen):
         self.editor = editor
         self.install_environment = install_environment
         self._environment: EnvironmentResult | None = None
+        self._warnings: list[str] = []
         self.status = "Starting..."
         self._cancel = threading.Event()
         self._started_at = 0.0
@@ -115,9 +118,13 @@ class CreatingProjectScreen(Screen):
                 cancel=self._cancel,
                 install_environment=self.install_environment,
                 on_environment=self._set_environment,
+                on_warning=self._warnings.append,
             )
             result = CreatingProjectScreen.Finished(
-                self.competition, project_path=project_path, environment=self._environment
+                self.competition,
+                project_path=project_path,
+                environment=self._environment,
+                warnings=self._warnings,
             )
         except ProjectCreationCancelled:
             result = CreatingProjectScreen.Finished(self.competition, cancelled=True)
